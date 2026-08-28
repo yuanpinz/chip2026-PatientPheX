@@ -1,0 +1,32 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local/editor files
+.DS_Store
+.idea/
+.vscode/
+
+# Competition data and locally supplied API notes
+PatientPheX-V1-A/
+PatientPheX-V1-A.zip
+大模型API访问指南.md
+
+# Third-party release (download separately; see README)
+PhenoTagger-master/
+PhenoTagger-master.zip
+
+# Generated artifacts and API caches
+artifacts/
+cache/
+outputs/
+.pytest_cache/
+.ruff_cache/
+.coverage
