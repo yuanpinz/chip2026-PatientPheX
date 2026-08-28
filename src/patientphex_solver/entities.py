@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import ahocorasick
@@ -75,11 +77,15 @@ class SurfaceStats:
 
 @dataclass(slots=True)
 class ExtractorConfig:
-    train_min_precision: float = 0.55
-    hpo_min_chars: int = 5
-    hpo_min_alpha: int = 3
+    train_min_precision: float = 0.35
+    hpo_min_chars: int = 4
+    hpo_min_alpha: int = 2
     include_hpo_synonyms: bool = True
     include_negated: bool = True
+    # The old PhenoTagger dictionary is useful for experiments, but its aliases
+    # contain ordinary English words. Keep it opt-in so the default submission
+    # does not trade precision for negligible cross-validation recall gains.
+    phenotagger_dictionary: str | None = None
 
 
 class GazetteerExtractor:
@@ -178,6 +184,38 @@ class GazetteerExtractor:
                 continue
             self.alias_identifiers[alias].update(identifiers)
             self.alias_source.setdefault(alias, "hpo")
+
+        dictionary_path = self.config.phenotagger_dictionary
+        if dictionary_path:
+            try:
+                external = json.loads(
+                    Path(dictionary_path).read_text(encoding="utf-8")
+                )
+            except (OSError, TypeError, ValueError):
+                external = {}
+            if isinstance(external, dict):
+                for raw_alias, raw_identifiers in external.items():
+                    if not isinstance(raw_alias, str) or not isinstance(raw_identifiers, list):
+                        continue
+                    alias = _match_normalize(raw_alias.replace("_", " "))
+                    if len(alias) < self.config.hpo_min_chars:
+                        continue
+                    if sum(character.isalpha() for character in alias) < self.config.hpo_min_alpha:
+                        continue
+                    mapped = {
+                        self.ontology.canonical_id(str(identifier))
+                        for identifier in raw_identifiers
+                        if self.ontology.canonical_id(str(identifier)) in self.ontology.descendants
+                    }
+                    if not mapped:
+                        continue
+                    observed = self.surface_stats.get(alias)
+                    if observed is not None and observed.occurrences and (
+                        observed.precision < self.config.train_min_precision
+                    ):
+                        continue
+                    self.alias_identifiers[alias].update(mapped)
+                    self.alias_source.setdefault(alias, "phenotagger")
 
     def _identifier_for_alias(self, alias: str) -> str | None:
         stats = self.surface_stats.get(alias)

@@ -16,6 +16,8 @@ DEFAULT_ENDPOINT = (
 DEFAULT_MODEL = "modelK5"
 _FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.IGNORECASE | re.DOTALL)
 _INDEX_LIST_RE = re.compile(r'"entity_indices"\s*:\s*\[([^]]*)', re.DOTALL)
+_ASSIGNMENT_ENTRY_RE = re.compile(r'"([^"\\]+)"\s*:\s*\[([^]]*)', re.DOTALL)
+_ENTITY_LIST_RE = re.compile(r'"entities"\s*:\s*\[', re.DOTALL)
 
 
 def parse_json_response(text: str) -> Any:
@@ -35,6 +37,28 @@ def parse_json_response(text: str) -> Any:
                 for value in re.findall(r"\d+", index_match.group(1))
             ]
             return {"entity_indices": values}
+        assignments_start = re.search(r'"assignments"\s*:\s*\{', candidate)
+        if assignments_start:
+            assignments: dict[str, list[int]] = {}
+            for match in _ASSIGNMENT_ENTRY_RE.finditer(candidate, assignments_start.end()):
+                values = [int(value) for value in re.findall(r"\d+", match.group(2))]
+                assignments[match.group(1)] = values
+            if assignments:
+                return {"assignments": assignments}
+        # Entity discovery responses are often truncated after an opening or
+        # partially completed array. Keep complete object entries and ignore
+        # the unfinished tail so one bad passage does not abort a run.
+        if _ENTITY_LIST_RE.search(candidate):
+            objects = []
+            for match in re.finditer(r"\{[^{}]*\}", candidate, re.DOTALL):
+                fragment = match.group(0)
+                try:
+                    value = json.loads(fragment)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(value, dict) and "text" in value:
+                    objects.append(value)
+            return {"entities": objects}
         starts = [position for position in (candidate.find("{"), candidate.find("[")) if position >= 0]
         if not starts:
             raise

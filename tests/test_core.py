@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from patientphex_solver.association import (
+    _filter_selected_indices_by_structure,
+    filter_associations_by_structure,
+)
 from patientphex_solver.evaluation import evaluate
 from patientphex_solver.io import validate_submission
 from patientphex_solver.llm import parse_json_response
@@ -71,3 +75,88 @@ def test_submission_validation_accepts_empty_prediction_fields() -> None:
         }
     ]
     assert validate_submission(predicted, expected) == []
+
+
+def test_parse_json_response_recovers_truncated_assignments() -> None:
+    assert parse_json_response('{"assignments":{"P1":[1,2],"P2":[3]') == {
+        "assignments": {"P1": [1, 2], "P2": [3]}
+    }
+
+
+def test_structure_filter_keeps_patient_local_findings() -> None:
+    document = {
+        "pmc_id": "1",
+        "patient": [
+            {"patient_id": "P1", "mention": [{"offset": 0, "length": 2}]},
+            {"patient_id": "P2", "mention": [{"offset": 17, "length": 2}]},
+        ],
+        "full_text": [
+            {
+                "section_type": "CASE",
+                "offset": 0,
+                "text": "P1 has seizures. P2 has ataxia.",
+            }
+        ],
+    }
+    entities = [
+        {
+            "identifier": "HP:0001250",
+            "offset": 7,
+            "length": 7,
+            "text": "seizures",
+            "note": None,
+        },
+        {
+            "identifier": "HP:0001251",
+            "offset": 24,
+            "length": 6,
+            "text": "ataxia",
+            "note": None,
+        },
+    ]
+    associations = [
+        {"patient_id": "P1", "phenotype": ["HP:0001250", "HP:0001251"]},
+        {"patient_id": "P2", "phenotype": ["HP:0001250", "HP:0001251"]},
+    ]
+    assert filter_associations_by_structure(document, entities, associations) == [
+        {"patient_id": "P1", "phenotype": ["HP:0001250"]},
+        {"patient_id": "P2", "phenotype": ["HP:0001251"]},
+    ]
+
+
+def test_structure_filter_is_occurrence_aware_for_repeated_hpo() -> None:
+    document = {
+        "pmc_id": "1",
+        "patient": [
+            {"patient_id": "P1", "mention": [{"offset": 0, "length": 2}]},
+            {"patient_id": "P2", "mention": [{"offset": 17, "length": 2}]},
+        ],
+        "full_text": [
+            {
+                "section_type": "CASE",
+                "offset": 0,
+                "text": "P1 has seizures. P2 has seizures.",
+            }
+        ],
+    }
+    entities = [
+        {
+            "identifier": "HP:0001250",
+            "offset": 7,
+            "length": 8,
+            "text": "seizures",
+            "note": None,
+        },
+        {
+            "identifier": "HP:0001250",
+            "offset": 24,
+            "length": 8,
+            "text": "seizures",
+            "note": None,
+        },
+    ]
+    selected = {"P1": {0, 1}, "P2": {0, 1}}
+    assert _filter_selected_indices_by_structure(document, entities, selected) == {
+        "P1": {0},
+        "P2": {1},
+    }

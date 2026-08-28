@@ -5,9 +5,9 @@
 ## 组成
 
 - `patientphex_solver.ontology`：解析赛题提供的 HPO 2026-06-23 OBO，并限制在 `HP:0000118` 分支。
-- `patientphex_solver.entities`：用训练集表面统计与 HPO 词典做离线实体候选抽取，保留原文全局 offset、复合 ID 和否定标记。
+- `patientphex_solver.entities`：用训练集表面统计与 HPO 词典做离线实体候选抽取，保留原文全局 offset、复合 ID 和否定标记；旧版 PhenoTagger 词典仅作为显式实验选项。
 - `patientphex_solver.llm_entities`：可选调用 API 让 9B 模型补充词典遗漏实体，之后由本地 HPO 链接器确定 ID。
-- `patientphex_solver.association`：使用实体候选索引作为受限动作空间，由大模型完成患者-表型关联；也提供无 API 的距离基线。
+- `patientphex_solver.association`：使用实体候选索引作为受限动作空间，由大模型完成患者-表型关联，并用患者局部文章结构过滤多患者串线；也提供无 API 的距离基线。
 - `patientphex_solver.evaluation`：实现赛题中的 mention/document、micro/macro F1 与总分。
 
 `PhenoTagger-master/` 是用户提供的官方代码包，不纳入 Git；它可用于额外实验，但发布包不含模型权重。官方 PhenoTagger API 是异步远程服务，未作为默认路径，以保证预测可缓存且可复现。
@@ -36,14 +36,13 @@ uv run patientphex-solver predict \
   --output outputs/pred_baseline.jsonl
 ```
 
-生成最终候选（实体补漏 + 患者关联均使用可缓存的大模型 API）：
+生成推荐候选（患者关联使用可缓存的大模型 API；实体抽取默认采用经交叉验证的离线词典）：
 
 ```bash
 uv run patientphex-solver predict \
   --data-dir PatientPheX-V1-A \
   --split a \
-  --use-llm \
-  --association llm \
+  --association joint-structured \
   --model modelK5 \
   --output outputs/pred_a.jsonl
 ```

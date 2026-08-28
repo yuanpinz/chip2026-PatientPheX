@@ -64,13 +64,19 @@ def discover_entities_with_llm(
         prompt = _entity_prompt(document, known_entities).replace(
             "{chunk}", json.dumps(chunk, ensure_ascii=False)
         )
-        response = client.chat_json(
-            [
-                {"role": "system", "content": _ENTITY_SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=2200,
-        )
+        try:
+            response = client.chat_json(
+                [
+                    {"role": "system", "content": _ENTITY_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=2200,
+            )
+        except (json.JSONDecodeError, RuntimeError):
+            # A single malformed model response must not discard the rest of
+            # the article; the gazetteer remains a valid baseline for the
+            # affected passage.
+            continue
         rows = response.get("entities", []) if isinstance(response, dict) else []
         for row in rows:
             if not isinstance(row, dict):

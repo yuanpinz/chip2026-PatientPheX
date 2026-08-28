@@ -4,7 +4,12 @@ import argparse
 import json
 from pathlib import Path
 
-from .association import associate_by_proximity, associate_with_llm
+from .association import (
+    associate_by_proximity,
+    associate_joint_structured_with_llm,
+    associate_joint_with_llm,
+    associate_with_llm,
+)
 from .entities import ExtractorConfig, GazetteerExtractor, merge_entities
 from .evaluation import evaluate
 from .io import read_jsonl, validate_submission, write_jsonl
@@ -22,9 +27,17 @@ def _paths(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     )
 
 
-def _build_extractor(data_dir: str | Path, train: list[dict]) -> tuple[HpoOntology, GazetteerExtractor]:
+def _build_extractor(
+    data_dir: str | Path,
+    train: list[dict],
+    phenotagger_dictionary: str | None = None,
+) -> tuple[HpoOntology, GazetteerExtractor]:
     ontology = HpoOntology.from_obo(Path(data_dir) / "hp.obo")
-    extractor = GazetteerExtractor(ontology, train, ExtractorConfig())
+    extractor = GazetteerExtractor(
+        ontology,
+        train,
+        ExtractorConfig(phenotagger_dictionary=phenotagger_dictionary),
+    )
     return ontology, extractor
 
 
@@ -59,11 +72,35 @@ def _predict(
                 id_frequency=extractor.id_frequency,
             )
             entities = merge_entities(entities, additions)
-        if association_mode == "llm":
+        if association_mode in {
+            "llm",
+            "joint-llm",
+            "joint-structured",
+            "joint-intersection",
+        }:
             if client is None:
                 raise ValueError("--association llm requires an API client")
             try:
-                association = associate_with_llm(document, entities, client)
+                association = (
+                    associate_joint_structured_with_llm(document, entities, client)
+                    if association_mode == "joint-structured"
+                    else associate_joint_with_llm(document, entities, client)
+                    if association_mode in {"joint-llm", "joint-intersection"}
+                    else associate_with_llm(document, entities, client)
+                )
+                if association_mode == "joint-intersection":
+                    proximity = associate_by_proximity(document, entities)
+                    proximity_by_id = {
+                        str(item["patient_id"]): set(item.get("phenotype", []))
+                        for item in proximity
+                    }
+                    for item in association:
+                        patient_id = str(item["patient_id"])
+                        item["phenotype"] = [
+                            value
+                            for value in item.get("phenotype", [])
+                            if value in proximity_by_id.get(patient_id, set())
+                        ]
             except RuntimeError as exc:
                 print(f"  LLM association failed; using proximity fallback: {exc}", flush=True)
                 association = associate_by_proximity(document, entities)
@@ -86,10 +123,19 @@ def _cmd_predict(args: argparse.Namespace) -> None:
     train_path, test_path, _ = _paths(args)
     train = read_jsonl(train_path)
     documents = read_jsonl(test_path if args.split == "a" else train_path)
-    ontology, extractor = _build_extractor(args.data_dir, train)
+    ontology, extractor = _build_extractor(
+        args.data_dir,
+        train,
+        args.phenotagger_dictionary,
+    )
     client = (
         BigModelClient(model=args.model, cache_dir=args.cache_dir)
-        if args.use_llm or args.association == "llm"
+        if args.use_llm or args.association in {
+            "llm",
+            "joint-llm",
+            "joint-structured",
+            "joint-intersection",
+        }
         else None
     )
     predictions = _predict(
@@ -134,7 +180,22 @@ def build_parser() -> argparse.ArgumentParser:
     predict.add_argument("--split", choices=["a", "train"], default="a")
     predict.add_argument("--output", required=True)
     predict.add_argument("--use-llm", action="store_true")
-    predict.add_argument("--association", choices=["proximity", "llm"], default="llm")
+    predict.add_argument(
+        "--phenotagger-dictionary",
+        default=None,
+        help="optional legacy PhenoTagger word_id_map.json",
+    )
+    predict.add_argument(
+        "--association",
+        choices=[
+            "proximity",
+            "llm",
+            "joint-llm",
+            "joint-structured",
+            "joint-intersection",
+        ],
+        default="joint-structured",
+    )
     predict.add_argument("--model", default="modelK5")
     predict.add_argument("--cache-dir", default="cache/llm")
     predict.set_defaults(func=_cmd_predict)
