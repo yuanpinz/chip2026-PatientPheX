@@ -14,6 +14,7 @@ from .ontology import HpoOntology, normalize_surface
 
 JsonObject = dict[str, Any]
 _ALPHANUMERIC_RE = re.compile(r"[0-9a-z]", re.IGNORECASE)
+_ABBREVIATION_RE = re.compile(r"[A-Z0-9]+(?:[/-][A-Z0-9]+)*")
 _NEGATION_RE = re.compile(
     r"(?:\bno\b|\bnot\b|\bwithout\b|\bden(?:y|ied|ies)\b|"
     r"\bnegative for\b|\bfree of\b|\babsence of\b|\babsent\b|"
@@ -60,8 +61,10 @@ def _valid_boundary(text: str, start: int, end: int) -> bool:
 @dataclass(slots=True)
 class SurfaceStats:
     identifier_counts: Counter[str] = field(default_factory=Counter)
+    positive_identifier_counts: Counter[str] = field(default_factory=Counter)
     positive_labels: int = 0
     negative_labels: int = 0
+    uppercase_positive_labels: int = 0
     occurrences: int = 0
 
     @property
@@ -86,6 +89,8 @@ class ExtractorConfig:
     # contain ordinary English words. Keep it opt-in so the default submission
     # does not trade precision for negligible cross-validation recall gains.
     phenotagger_dictionary: str | None = None
+    include_train_abbreviations: bool = True
+    abbreviation_min_positive: int = 1
 
 
 class GazetteerExtractor:
@@ -126,6 +131,8 @@ class GazetteerExtractor:
                 item = stats[alias]
                 identifier = str(entity["identifier"])
                 item.identifier_counts[identifier] += 1
+                raw_text = str(entity["text"]).strip()
+                uppercase_abbreviation = _is_uppercase_abbreviation(raw_text)
                 for unit in identifier.split(";"):
                     if unit.startswith("HP:"):
                         self.id_frequency[self.ontology.canonical_id(unit)] += 1
@@ -140,6 +147,9 @@ class GazetteerExtractor:
                         item.negative_labels += 1
                     else:
                         item.positive_labels += 1
+                        item.positive_identifier_counts[identifier] += 1
+                        if uppercase_abbreviation:
+                            item.uppercase_positive_labels += 1
                     annotated_spans.add(unique_key)
 
         if not aliases:
@@ -160,7 +170,15 @@ class GazetteerExtractor:
 
     def _build_aliases(self) -> None:
         for alias, stats in self.surface_stats.items():
-            if (
+            is_trained_abbreviation = (
+                self.config.include_train_abbreviations
+                and stats.uppercase_positive_labels >= self.config.abbreviation_min_positive
+                and _is_uppercase_abbreviation(alias.upper())
+            )
+            if is_trained_abbreviation:
+                self.alias_identifiers[alias].update(stats.positive_identifier_counts)
+                self.alias_source[alias] = "train-abbreviation"
+            elif (
                 stats.labels
                 and stats.precision >= self.config.train_min_precision
                 and _ALPHANUMERIC_RE.search(alias)
@@ -220,7 +238,12 @@ class GazetteerExtractor:
     def _identifier_for_alias(self, alias: str) -> str | None:
         stats = self.surface_stats.get(alias)
         if stats and stats.identifier_counts:
-            identifier = stats.identifier_counts.most_common(1)[0][0]
+            counts = (
+                stats.positive_identifier_counts
+                if self.alias_source.get(alias) == "train-abbreviation"
+                else stats.identifier_counts
+            )
+            identifier = counts.most_common(1)[0][0]
             if identifier != "-1":
                 return ";".join(
                     self.ontology.canonical_id(unit) for unit in identifier.split(";")
@@ -234,6 +257,58 @@ class GazetteerExtractor:
         return max(
             pool,
             key=lambda identifier: (self.id_frequency.get(identifier, 0), identifier),
+        )
+
+    @staticmethod
+    def _abbreviation_context_normalize(text: str) -> str:
+        return re.sub(r"[-/]", " ", normalize_surface(text))
+
+    def _abbreviation_is_expanded(
+        self,
+        text: str,
+        start: int,
+        identifier: str,
+    ) -> bool:
+        sentence_start = max(
+            text.rfind(".", 0, start),
+            text.rfind(";", 0, start),
+            text.rfind("!", 0, start),
+            text.rfind("?", 0, start),
+            text.rfind("\n", 0, start),
+        )
+        prefix = self._abbreviation_context_normalize(text[sentence_start + 1 : start])
+        if not prefix.endswith("("):
+            return False
+        prefix = prefix[:-1].rstrip()
+        target_ids = set(identifier.split(";"))
+        aliases = set()
+        for target_id in target_ids:
+            term = self.ontology.terms.get(target_id)
+            if term is None:
+                continue
+            aliases.add(term.name)
+            aliases.update(term.synonyms)
+        aliases.update(
+            alias
+            for alias, stats in self.surface_stats.items()
+            if target_ids.intersection(stats.positive_identifier_counts)
+        )
+        for alias in aliases:
+            if len(alias) >= 5 and prefix.endswith(self._abbreviation_context_normalize(alias)):
+                return True
+        return False
+
+    def _is_supported_abbreviation(
+        self,
+        text: str,
+        start: int,
+        end: int,
+        identifier: str,
+    ) -> bool:
+        return _is_uppercase_abbreviation(text[start:end]) and self._abbreviation_is_expanded(
+            text,
+            start,
+            identifier,
         )
 
     @staticmethod
@@ -263,6 +338,13 @@ class GazetteerExtractor:
                 identifier = self._identifier_for_alias(alias)
                 if identifier is None or identifier == self.ontology.root:
                     continue
+                if self.alias_source.get(alias) == "train-abbreviation" and not self._is_supported_abbreviation(
+                    text,
+                    start,
+                    end,
+                    identifier,
+                ):
+                    continue
                 note = "NO" if self._is_negated(text, start) else None
                 if note == "NO" and not self.config.include_negated:
                     continue
@@ -284,6 +366,16 @@ class GazetteerExtractor:
                     seen.add(key)
                     entities.append(entity)
         return sorted(entities, key=lambda item: (item["offset"], -item["length"], item["identifier"]))
+
+
+def _is_uppercase_abbreviation(text: str) -> bool:
+    value = text.strip()
+    return (
+        len(value) >= 2
+        and any(character.isalpha() for character in value)
+        and value == value.upper()
+        and _ABBREVIATION_RE.fullmatch(value) is not None
+    )
 
 
 def merge_entities(*collections: Iterable[JsonObject]) -> list[JsonObject]:

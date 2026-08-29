@@ -331,12 +331,25 @@ def associate_with_llm(
     entities: list[JsonObject],
     client: BigModelClient,
 ) -> list[JsonObject]:
+    positive_entities, selected = _patient_entity_indices(document, entities, client)
+    patient_ids = [str(patient["patient_id"]) for patient in document.get("patient", [])]
+    if not positive_entities:
+        return [{"patient_id": patient_id, "phenotype": []} for patient_id in patient_ids]
+    return _associations_from_indices(patient_ids, positive_entities, selected)
+
+
+def _patient_entity_indices(
+    document: JsonObject,
+    entities: list[JsonObject],
+    client: BigModelClient,
+) -> tuple[list[JsonObject], dict[str, set[int]]]:
+    """Select entity occurrences independently for each listed patient."""
     positive_entities = [entity for entity in entities if entity.get("note") != "NO"]
     patient_ids = [str(patient["patient_id"]) for patient in document.get("patient", [])]
     if not patient_ids:
-        return []
+        return positive_entities, defaultdict(set)
     if not positive_entities:
-        return [{"patient_id": patient_id, "phenotype": []} for patient_id in patient_ids]
+        return positive_entities, defaultdict(set)
 
     selected: dict[str, set[int]] = defaultdict(set)
     indexed_entities = [
@@ -378,17 +391,27 @@ def associate_with_llm(
                 if index in chunk_indices:
                     selected[patient_id].add(index)
 
-    associations: list[JsonObject] = []
-    for patient_id in patient_ids:
-        values: list[str] = []
-        seen_values: set[str] = set()
-        for index in sorted(selected.get(patient_id, set()), key=lambda item: positive_entities[item]["offset"]):
-            value = _entity_value(positive_entities[index])
-            if value not in seen_values:
-                seen_values.add(value)
-                values.append(value)
-        associations.append({"patient_id": patient_id, "phenotype": values})
-    return associations
+    return positive_entities, selected
+
+
+def associate_patient_structured_with_llm(
+    document: JsonObject,
+    entities: list[JsonObject],
+    client: BigModelClient,
+) -> list[JsonObject]:
+    """Use per-patient LLM selections constrained at occurrence level."""
+    patient_ids = [str(patient["patient_id"]) for patient in document.get("patient", [])]
+    positive_entities, selected = _patient_entity_indices(document, entities, client)
+    if not positive_entities:
+        return [{"patient_id": patient_id, "phenotype": []} for patient_id in patient_ids]
+    selected = _filter_selected_indices_by_structure(
+        document,
+        positive_entities,
+        selected,
+        previous_distance=3000,
+        next_distance=500,
+    )
+    return _associations_from_indices(patient_ids, positive_entities, selected)
 
 
 def associate_joint_with_llm(

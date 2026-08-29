@@ -4,6 +4,7 @@ from .association import (
     associate_by_proximity,
     associate_joint_structured_with_llm,
     associate_joint_with_llm,
+    associate_patient_structured_with_llm,
     associate_with_llm,
 )
 from .entities import ExtractorConfig, GazetteerExtractor, merge_entities
@@ -20,6 +21,7 @@ __all__ = [
     "associate_by_proximity",
     "associate_joint_structured_with_llm",
     "associate_joint_with_llm",
+    "associate_patient_structured_with_llm",
     "associate_with_llm",
     "evaluate",
     "merge_entities",

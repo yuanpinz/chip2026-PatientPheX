@@ -4,6 +4,7 @@ from patientphex_solver.association import (
     _filter_selected_indices_by_structure,
     filter_associations_by_structure,
 )
+from patientphex_solver.entities import GazetteerExtractor
 from patientphex_solver.evaluation import evaluate
 from patientphex_solver.io import validate_submission
 from patientphex_solver.llm import parse_json_response
@@ -23,6 +24,67 @@ def test_hpo_alias_and_alt_id_resolution(tmp_path) -> None:
     ontology = HpoOntology.from_obo(obo)
     assert ontology.resolve_alias("short stature") == "HP:0000002"
     assert "HP:0000002" in ontology.descendants
+
+
+def test_trained_abbreviation_requires_matching_expansion(tmp_path) -> None:
+    obo = tmp_path / "small.obo"
+    obo.write_text(
+        """format-version: 1.2
+
+[Term]
+id: HP:0000118
+name: Phenotypic abnormality
+
+[Term]
+id: HP:0000717
+name: Autism
+synonym: "Autism spectrum disorder" EXACT []
+is_a: HP:0000118 ! root
+
+[Term]
+id: HP:0001249
+name: Intellectual disability
+is_a: HP:0000118 ! root
+""",
+        encoding="utf-8",
+    )
+    ontology = HpoOntology.from_obo(obo)
+    training = [
+        {
+            "pmc_id": "train",
+            "full_text": [
+                {
+                    "offset": 0,
+                    "text": "Autism spectrum disorder (ASD) was observed.",
+                }
+            ],
+            "entities": [
+                {
+                    "identifier": "HP:0000717",
+                    "offset": 27,
+                    "length": 3,
+                    "text": "ASD",
+                    "note": None,
+                }
+            ],
+        }
+    ]
+    extractor = GazetteerExtractor(ontology, training)
+    expanded = {
+        "pmc_id": "expanded",
+        "full_text": [
+            {
+                "offset": 0,
+                "text": "Autism spectrum disorder (ASD) was observed.",
+            }
+        ],
+    }
+    unrelated = {
+        "pmc_id": "unrelated",
+        "full_text": [{"offset": 0, "text": "The Gene ID was recorded."}],
+    }
+    assert "ASD" in [item["text"] for item in extractor.extract_document(expanded)]
+    assert extractor.extract_document(unrelated) == []
 
 
 def test_evaluation_counts_negative_prediction_as_false_positive() -> None:

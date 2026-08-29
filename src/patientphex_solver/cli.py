@@ -8,6 +8,7 @@ from .association import (
     associate_by_proximity,
     associate_joint_structured_with_llm,
     associate_joint_with_llm,
+    associate_patient_structured_with_llm,
     associate_with_llm,
 )
 from .entities import ExtractorConfig, GazetteerExtractor, merge_entities
@@ -74,6 +75,7 @@ def _predict(
             entities = merge_entities(entities, additions)
         if association_mode in {
             "llm",
+            "patient-structured",
             "joint-llm",
             "joint-structured",
             "joint-intersection",
@@ -84,6 +86,8 @@ def _predict(
                 association = (
                     associate_joint_structured_with_llm(document, entities, client)
                     if association_mode == "joint-structured"
+                    else associate_patient_structured_with_llm(document, entities, client)
+                    if association_mode == "patient-structured"
                     else associate_joint_with_llm(document, entities, client)
                     if association_mode in {"joint-llm", "joint-intersection"}
                     else associate_with_llm(document, entities, client)
@@ -132,6 +136,7 @@ def _cmd_predict(args: argparse.Namespace) -> None:
         BigModelClient(model=args.model, cache_dir=args.cache_dir)
         if args.use_llm or args.association in {
             "llm",
+            "patient-structured",
             "joint-llm",
             "joint-structured",
             "joint-intersection",
@@ -190,6 +195,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[
             "proximity",
             "llm",
+            "patient-structured",
             "joint-llm",
             "joint-structured",
             "joint-intersection",
