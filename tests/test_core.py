@@ -8,6 +8,7 @@ from patientphex_solver.entities import GazetteerExtractor
 from patientphex_solver.evaluation import evaluate
 from patientphex_solver.io import validate_submission
 from patientphex_solver.llm import parse_json_response
+from patientphex_solver.llm_entities import discover_entities_article_with_llm
 from patientphex_solver.ontology import HpoOntology
 
 
@@ -85,6 +86,69 @@ is_a: HP:0000118 ! root
     }
     assert "ASD" in [item["text"] for item in extractor.extract_document(expanded)]
     assert extractor.extract_document(unrelated) == []
+
+
+def test_article_entity_discovery_aligns_offsets_and_requires_exact_text_alias(tmp_path) -> None:
+    obo = tmp_path / "small.obo"
+    obo.write_text(
+        """format-version: 1.2
+
+[Term]
+id: HP:0000118
+name: Phenotypic abnormality
+
+[Term]
+id: HP:0000739
+name: Anxiety
+is_a: HP:0000118 ! root
+""",
+        encoding="utf-8",
+    )
+
+    class FakeClient:
+        def chat_json(self, messages, *, max_tokens):
+            return {
+                "entities": [
+                    {
+                        "passage_index": 0,
+                        "start": 0,
+                        "text": "anxiety",
+                        "canonical": "Anxiety",
+                        "negated": False,
+                    },
+                    {
+                        "passage_index": 0,
+                        "start": 20,
+                        "text": "not a phenotype",
+                        "canonical": "Anxiety",
+                        "negated": False,
+                    },
+                ]
+            }
+
+    ontology = HpoOntology.from_obo(obo)
+    document = {
+        "pmc_id": "article",
+        "full_text": [
+            {"section_type": "CASE", "offset": 0, "text": "Severe anxiety was observed."}
+        ],
+    }
+    additions = discover_entities_article_with_llm(
+        document,
+        [],
+        ontology,
+        FakeClient(),
+    )
+    assert additions == [
+        {
+            "identifier": "HP:0000739",
+            "type": "Phenotype",
+            "offset": 7,
+            "length": 7,
+            "text": "anxiety",
+            "note": None,
+        }
+    ]
 
 
 def test_evaluation_counts_negative_prediction_as_false_positive() -> None:

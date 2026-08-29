@@ -47,6 +47,21 @@ uv run patientphex-solver predict \
   --output outputs/pred_a.jsonl
 ```
 
+患者关联也可以使用更强的模型。文章级实体发现是保守实验模式，只接受模型输出文本本身为
+HPO 精确别名的新增实体，避免模糊链接引入大量误报：
+
+```bash
+uv run patientphex-solver predict \
+  --data-dir PatientPheX-V1-A \
+  --split a \
+  --use-llm \
+  --entity-batch article \
+  --association patient-structured \
+  --model modelS5_6S \
+  --cache-dir cache/llm \
+  --output outputs/pred_a_s56.jsonl
+```
+
 提交前校验：
 
 ```bash

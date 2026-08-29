@@ -15,7 +15,10 @@ from .entities import ExtractorConfig, GazetteerExtractor, merge_entities
 from .evaluation import evaluate
 from .io import read_jsonl, validate_submission, write_jsonl
 from .llm import BigModelClient
-from .llm_entities import discover_entities_with_llm
+from .llm_entities import (
+    discover_entities_article_with_llm,
+    discover_entities_with_llm,
+)
 from .ontology import HpoOntology
 
 
@@ -49,6 +52,7 @@ def _predict(
     *,
     use_llm: bool,
     association_mode: str,
+    entity_batch: str,
     client: BigModelClient | None,
     progress_path: str | Path | None = None,
 ) -> list[dict]:
@@ -65,12 +69,13 @@ def _predict(
         print(f"[{index}/{len(documents)}] {document['pmc_id']}", flush=True)
         entities = extractor.extract_document(document)
         if use_llm and client is not None:
-            additions = discover_entities_with_llm(
-                document,
-                entities,
-                ontology,
-                client,
-                id_frequency=extractor.id_frequency,
+            discover = (
+                discover_entities_article_with_llm
+                if entity_batch == "article"
+                else discover_entities_with_llm
+            )
+            additions = discover(
+                document, entities, ontology, client, id_frequency=extractor.id_frequency
             )
             entities = merge_entities(entities, additions)
         if association_mode in {
@@ -149,6 +154,7 @@ def _cmd_predict(args: argparse.Namespace) -> None:
         extractor,
         use_llm=args.use_llm,
         association_mode=args.association,
+        entity_batch=args.entity_batch,
         client=client,
         progress_path=str(args.output) + ".progress",
     )
@@ -185,6 +191,12 @@ def build_parser() -> argparse.ArgumentParser:
     predict.add_argument("--split", choices=["a", "train"], default="a")
     predict.add_argument("--output", required=True)
     predict.add_argument("--use-llm", action="store_true")
+    predict.add_argument(
+        "--entity-batch",
+        choices=["passage", "article"],
+        default="passage",
+        help="scope of optional LLM entity discovery calls",
+    )
     predict.add_argument(
         "--phenotagger-dictionary",
         default=None,
