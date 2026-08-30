@@ -92,6 +92,105 @@ is_a: HP:0000118 ! root
     assert extractor.extract_document(unrelated) == []
 
 
+def test_exact_ontology_alias_overrides_conflicting_training_surface(tmp_path) -> None:
+    obo = tmp_path / "small.obo"
+    obo.write_text(
+        """format-version: 1.2
+
+[Term]
+id: HP:0000118
+name: Phenotypic abnormality
+
+[Term]
+id: HP:0000002
+name: Abnormality of stature
+synonym: "Small stature" EXACT []
+is_a: HP:0000118 ! root
+
+[Term]
+id: HP:0004322
+name: Short stature
+is_a: HP:0000118 ! root
+""",
+        encoding="utf-8",
+    )
+    ontology = HpoOntology.from_obo(obo)
+    training = [
+        {
+            "pmc_id": "train",
+            "full_text": [{"offset": 0, "text": "Small stature."}],
+            "entities": [
+                {
+                    "identifier": "HP:0004322",
+                    "offset": 0,
+                    "length": 12,
+                    "text": "Small stature",
+                    "note": None,
+                }
+            ],
+        }
+    ]
+    extractor = GazetteerExtractor(ontology, training)
+    predicted = extractor.extract_document(
+        {"pmc_id": "article", "full_text": [{"offset": 0, "text": "Small stature."}]}
+    )
+    assert predicted[0]["identifier"] == "HP:0000002"
+
+
+def test_negation_requires_a_direct_scope(tmp_path) -> None:
+    obo = tmp_path / "small.obo"
+    obo.write_text(
+        """format-version: 1.2
+
+[Term]
+id: HP:0000118
+name: Phenotypic abnormality
+
+[Term]
+id: HP:0001250
+name: Seizure
+is_a: HP:0000118 ! root
+""",
+        encoding="utf-8",
+    )
+    ontology = HpoOntology.from_obo(obo)
+    extractor = GazetteerExtractor(
+        ontology,
+        [
+            {
+                "pmc_id": "train",
+                "full_text": [
+                    {
+                        "offset": 0,
+                        "text": "Seizure.",
+                    }
+                ],
+                "entities": [
+                    {
+                        "identifier": "HP:0001250",
+                        "offset": 0,
+                        "length": 7,
+                        "text": "Seizure",
+                        "note": None,
+                    }
+                ],
+            }
+        ],
+    )
+    predicted = extractor.extract_document(
+        {
+            "pmc_id": "article",
+            "full_text": [
+                {
+                    "offset": 0,
+                    "text": "No evidence of seizure. Seizure was absent.",
+                }
+            ],
+        }
+    )
+    assert [item["note"] for item in predicted] == ["NO", "NO"]
+
+
 def test_article_entity_discovery_aligns_offsets_and_requires_exact_text_alias(
     tmp_path,
 ) -> None:
@@ -441,3 +540,37 @@ def test_structure_filter_is_occurrence_aware_for_repeated_hpo() -> None:
         "P1": {0},
         "P2": {1},
     }
+
+
+def test_structure_filter_sorts_patient_anchors_by_article_offset() -> None:
+    document = {
+        "pmc_id": "1",
+        # Patient metadata order is independent of mention order in the article.
+        "patient": [
+            {"patient_id": "P2", "mention": [{"offset": 100, "length": 2}]},
+            {"patient_id": "P1", "mention": [{"offset": 0, "length": 2}]},
+        ],
+        "full_text": [
+            {"section_type": "CASE", "offset": 0, "text": "P1"},
+            {"section_type": "CASE", "offset": 50, "text": "Ataxia was observed."},
+            {"section_type": "CASE", "offset": 100, "text": "P2"},
+        ],
+    }
+    entities = [
+        {
+            "identifier": "HP:0001251",
+            "offset": 50,
+            "length": 6,
+            "text": "Ataxia",
+            "note": None,
+        }
+    ]
+    selected = {"P1": {0}, "P2": {0}}
+
+    assert _filter_selected_indices_by_structure(
+        document,
+        entities,
+        selected,
+        previous_distance=100,
+        next_distance=0,
+    ) == {"P1": {0}}

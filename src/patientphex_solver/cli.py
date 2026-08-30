@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .association import (
     associate_by_proximity,
+    associate_consensus_structured_with_llm,
     associate_joint_structured_with_llm,
     associate_joint_with_llm,
     associate_patient_structured_with_llm,
@@ -102,12 +103,18 @@ def _predict(
             "patient-structured",
             "joint-llm",
             "joint-structured",
+            "consensus-structured",
             "joint-intersection",
         }:
             if client is None:
                 raise ValueError("--association llm requires an API client")
             try:
                 association = (
+                    associate_consensus_structured_with_llm(
+                        document, entities, client
+                    )
+                    if association_mode == "consensus-structured"
+                    else
                     associate_joint_structured_with_llm(document, entities, client)
                     if association_mode == "joint-structured"
                     else associate_patient_structured_with_llm(
@@ -170,6 +177,7 @@ def _cmd_predict(args: argparse.Namespace) -> None:
             "patient-structured",
             "joint-llm",
             "joint-structured",
+            "consensus-structured",
             "joint-intersection",
             "patient-direct",
         }
@@ -237,6 +245,7 @@ def build_parser() -> argparse.ArgumentParser:
             "patient-structured",
             "joint-llm",
             "joint-structured",
+            "consensus-structured",
             "joint-intersection",
             "patient-direct",
         ],

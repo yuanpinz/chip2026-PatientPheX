@@ -16,9 +16,18 @@ JsonObject = dict[str, Any]
 _ALPHANUMERIC_RE = re.compile(r"[0-9a-z]", re.IGNORECASE)
 _ABBREVIATION_RE = re.compile(r"[A-Z0-9]+(?:[/-][A-Z0-9]+)*")
 _NEGATION_RE = re.compile(
-    r"(?:\bno\b|\bnot\b|\bwithout\b|\bden(?:y|ied|ies)\b|"
-    r"\bnegative for\b|\bfree of\b|\babsence of\b|\babsent\b|"
-    r"\bneither\b|\bnever\b)[^.;:!?]{0,55}$",
+    r"(?:\bno\b|\bwithout\b|\babsence of\b|\babsent\b|"
+    r"\bnegative for\b|\bfree of\b|\bden(?:y|ied|ies)\b|"
+    r"\bdid not (?:have|show|demonstrate|exhibit)\b|"
+    r"\b(?:not|never) (?:have|show|demonstrate|exhibit)\b)"
+    r"(?:\s+(?:evidence|signs?|symptoms?|history|presence)\s+of\b|"
+    r"\s+(?:any|an?\s+|the\s+|bilateral\s+|unilateral\s+|"
+    r"mild\s+|severe\s+|significant\s+|obvious\s+|clinical\s+))*\s*$",
+    re.IGNORECASE,
+)
+_NEGATION_SUFFIX_RE = re.compile(
+    r"^\s+(?:was|were|is|are|remained|remains)\s+"
+    r"(?:absent|not present|not observed|negative)\b",
     re.IGNORECASE,
 )
 _GENERIC_HPO_ALIASES = {
@@ -80,7 +89,7 @@ class SurfaceStats:
 
 @dataclass(slots=True)
 class ExtractorConfig:
-    train_min_precision: float = 0.35
+    train_min_precision: float = 0.40
     hpo_min_chars: int = 4
     hpo_min_alpha: int = 2
     include_hpo_synonyms: bool = True
@@ -236,6 +245,9 @@ class GazetteerExtractor:
                     self.alias_source.setdefault(alias, "phenotagger")
 
     def _identifier_for_alias(self, alias: str) -> str | None:
+        exact_identifiers = self.ontology.aliases.get(alias, set())
+        if len(exact_identifiers) == 1:
+            return next(iter(exact_identifiers))
         stats = self.surface_stats.get(alias)
         if stats and stats.identifier_counts:
             counts = (
@@ -346,6 +358,18 @@ class GazetteerExtractor:
                 ):
                     continue
                 note = "NO" if self._is_negated(text, start) else None
+                if note is None:
+                    sentence_end_candidates = [
+                        text.find(mark, end) for mark in ".!?;\n"
+                    ]
+                    sentence_end_candidates = [
+                        value for value in sentence_end_candidates if value >= 0
+                    ]
+                    sentence_end = min(
+                        sentence_end_candidates, default=len(text)
+                    )
+                    if _NEGATION_SUFFIX_RE.search(text[end : sentence_end + 1]):
+                        note = "NO"
                 if note == "NO" and not self.config.include_negated:
                     continue
                 entity = {

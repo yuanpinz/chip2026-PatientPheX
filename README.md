@@ -42,10 +42,16 @@ uv run patientphex-solver predict \
 uv run patientphex-solver predict \
   --data-dir PatientPheX-V1-A \
   --split a \
-  --association joint-structured \
-  --model modelK5 \
+  --use-llm \
+  --entity-batch article \
+  --association consensus-structured \
+  --model modelS5_6S \
+  --cache-dir cache/llm \
   --output outputs/pred_a.jsonl
 ```
+
+`consensus-structured` 对 per-patient 与 joint 两种实体 occurrence 选择分别施加患者局部结构约束，
+再按患者合并；训练集金标准实体实验中，关联 micro/macro F1 为 `0.8441/0.7895`。
 
 患者关联也可以使用更强的模型。文章级实体发现是保守实验模式，只接受模型输出文本本身为
 HPO 精确别名的新增实体，避免模糊链接引入大量误报：

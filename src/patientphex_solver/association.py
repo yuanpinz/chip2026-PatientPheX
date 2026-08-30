@@ -79,6 +79,7 @@ def _structural_patient_ids(
                     mention_located[0] if mention_located is not None else -1,
                 )
             )
+    anchors.sort(key=lambda item: item[0])
     if not anchors:
         return set()
 
@@ -508,6 +509,43 @@ def associate_joint_structured_with_llm(
         selected,
     )
     return _associations_from_indices(patient_ids, positive_entities, selected)
+
+
+def associate_consensus_structured_with_llm(
+    document: JsonObject,
+    entities: list[JsonObject],
+    client: BigModelClient,
+) -> list[JsonObject]:
+    """Union independently filtered per-patient and joint occurrence selections."""
+    patient_ids = [str(patient["patient_id"]) for patient in document.get("patient", [])]
+    positive_entities, patient_selected = _patient_entity_indices(
+        document, entities, client
+    )
+    joint_entities, joint_selected = _joint_entity_indices(document, entities, client)
+    if not positive_entities:
+        return [{"patient_id": patient_id, "phenotype": []} for patient_id in patient_ids]
+    if len(joint_entities) != len(positive_entities):
+        raise RuntimeError("association strategies used different entity candidates")
+
+    patient_selected = _filter_selected_indices_by_structure(
+        document,
+        positive_entities,
+        patient_selected,
+        previous_distance=3000,
+        next_distance=500,
+    )
+    joint_selected = _filter_selected_indices_by_structure(
+        document,
+        positive_entities,
+        joint_selected,
+        previous_distance=3000,
+        next_distance=300,
+    )
+    consensus: dict[str, set[int]] = defaultdict(set)
+    for patient_id in patient_ids:
+        consensus[patient_id].update(patient_selected.get(patient_id, set()))
+        consensus[patient_id].update(joint_selected.get(patient_id, set()))
+    return _associations_from_indices(patient_ids, positive_entities, consensus)
 
 
 def associate_by_proximity(
