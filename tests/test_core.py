@@ -4,7 +4,15 @@ from patientphex_solver.association import (
     _filter_selected_indices_by_structure,
     filter_associations_by_structure,
 )
+from patientphex_solver.association_judge import (
+    associate_values_calibrated_with_llm,
+    build_association_calibration_examples,
+)
 from patientphex_solver.entities import GazetteerExtractor
+from patientphex_solver.entity_judge import (
+    build_calibration_examples,
+    judge_entities_with_llm,
+)
 from patientphex_solver.evaluation import evaluate
 from patientphex_solver.io import validate_submission
 from patientphex_solver.llm import parse_json_response
@@ -18,6 +26,181 @@ from patientphex_solver.patient_phenotypes import (
 
 def test_parse_json_response_with_markdown_fence() -> None:
     assert parse_json_response('```json\n{"ok": true}\n```') == {"ok": True}
+
+
+def test_parse_json_response_ignores_trailing_explanation() -> None:
+    assert parse_json_response(
+        '{"accepted_indices":[1]}\nI selected the explicit finding.'
+    ) == {"accepted_indices": [1]}
+
+
+def test_calibrated_entity_judge_selects_returned_indices(tmp_path) -> None:
+    obo = tmp_path / "small.obo"
+    obo.write_text(
+        """format-version: 1.2
+
+[Term]
+id: HP:0000118
+name: Phenotypic abnormality
+
+[Term]
+id: HP:0001250
+name: Seizure
+is_a: HP:0000118 ! root
+
+[Term]
+id: HP:0004322
+name: Short stature
+is_a: HP:0000118 ! root
+""",
+        encoding="utf-8",
+    )
+    ontology = HpoOntology.from_obo(obo)
+    training = [
+        {
+            "pmc_id": "train",
+            "full_text": [
+                {"offset": 0, "section_type": "CASE", "text": "Seizure was observed."}
+            ],
+            "entities": [
+                {
+                    "identifier": "HP:0001250",
+                    "type": "Phenotype",
+                    "offset": 0,
+                    "length": 7,
+                    "text": "Seizure",
+                    "note": None,
+                }
+            ],
+        }
+    ]
+    extractor = GazetteerExtractor(ontology, training)
+    calibration = build_calibration_examples(training, extractor, ontology)
+    document = {
+        "pmc_id": "target",
+        "full_text": [
+            {
+                "offset": 0,
+                "section_type": "CASE",
+                "text": "Seizure and short stature were observed.",
+            }
+        ],
+    }
+    candidates = [
+        {
+            "identifier": "HP:0001250",
+            "type": "Phenotype",
+            "offset": 0,
+            "length": 7,
+            "text": "Seizure",
+            "note": None,
+        },
+        {
+            "identifier": "HP:0004322",
+            "type": "Phenotype",
+            "offset": 12,
+            "length": 13,
+            "text": "short stature",
+            "note": None,
+        },
+    ]
+
+    class FakeClient:
+        def chat_json(self, messages, *, max_tokens=8000):
+            assert "CALIBRATION EXAMPLES" in messages[1]["content"]
+            return {"accepted_indices": [1], "uncertain_indices": [0]}
+
+    assert judge_entities_with_llm(
+        document,
+        candidates,
+        ontology,
+        FakeClient(),
+        calibration,
+    ) == [candidates[1]]
+
+
+def test_calibrated_association_judge_groups_occurrences(tmp_path) -> None:
+    obo = tmp_path / "small.obo"
+    obo.write_text(
+        """format-version: 1.2
+
+[Term]
+id: HP:0000118
+name: Phenotypic abnormality
+
+[Term]
+id: HP:0001250
+name: Seizure
+is_a: HP:0000118 ! root
+
+[Term]
+id: HP:0004322
+name: Short stature
+is_a: HP:0000118 ! root
+""",
+        encoding="utf-8",
+    )
+    ontology = HpoOntology.from_obo(obo)
+    entities = [
+        {
+            "identifier": "HP:0001250",
+            "type": "Phenotype",
+            "offset": 11,
+            "length": 7,
+            "text": "seizure",
+            "note": None,
+        },
+        {
+            "identifier": "HP:0001250",
+            "type": "Phenotype",
+            "offset": 23,
+            "length": 7,
+            "text": "seizure",
+            "note": None,
+        },
+        {
+            "identifier": "HP:0004322",
+            "type": "Phenotype",
+            "offset": 35,
+            "length": 13,
+            "text": "short stature",
+            "note": None,
+        },
+    ]
+    document = {
+        "pmc_id": "train",
+        "patient": [
+            {"patient_id": "P1", "mention": [{"text": "The child", "offset": 0, "length": 9}]}
+        ],
+        "full_text": [
+            {
+                "offset": 0,
+                "section_type": "CASE",
+                "text": "The child: seizure; seizure; short stature.",
+            }
+        ],
+        "entities": entities,
+        "association": [{"patient_id": "P1", "phenotype": ["HP:0001250"]}],
+    }
+    calibration = build_association_calibration_examples([document], ontology)
+    assert {item.accepted for item in calibration} == {True, False}
+
+    class FakeClient:
+        def chat_json(self, messages, *, max_tokens=8000):
+            candidate_section = messages[1]["content"].split(
+                "CANDIDATE PHENOTYPE VALUES:", 1
+            )[1]
+            assert candidate_section.count('"value":"HP:0001250"') == 1
+            return {"associated_indices": [0], "uncertain_indices": [1]}
+
+    association = associate_values_calibrated_with_llm(
+        document,
+        entities,
+        ontology,
+        FakeClient(),
+        calibration,
+    )
+    assert association == [{"patient_id": "P1", "phenotype": ["HP:0001250"]}]
 
 
 def test_hpo_alias_and_alt_id_resolution(tmp_path) -> None:

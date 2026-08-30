@@ -84,4 +84,20 @@ uv run patientphex-solver evaluate \
   --predicted outputs/pred_train.jsonl
 ```
 
+纯 API 校准工具：先准备包含 `pmc_id` 和 `entities` 的候选 JSONL，再让 API 按训练集标注风格筛选实体或关联患者。训练集模式会排除当前文章的校准样例，便于做留出验证：
+
+```bash
+uv run patientphex-solver judge-entities \
+  --split train \
+  --candidates outputs/train_candidates.jsonl \
+  --model modelS5_6S \
+  --output outputs/train_judged.jsonl
+
+uv run patientphex-solver judge-associations \
+  --split a \
+  --candidates outputs/pred_a_entities.jsonl \
+  --model modelS5_6S \
+  --output outputs/pred_a_final.jsonl
+```
+
 所有 API 原始响应都按请求内容 SHA-256 缓存在 `cache/llm/`。该目录已被 `.gitignore` 排除，避免将数据或响应提交到 Git。

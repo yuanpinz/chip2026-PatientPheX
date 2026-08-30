@@ -12,7 +12,12 @@ from .association import (
     associate_patient_structured_with_llm,
     associate_with_llm,
 )
+from .association_judge import (
+    associate_values_calibrated_with_llm,
+    build_association_calibration_examples,
+)
 from .entities import ExtractorConfig, GazetteerExtractor, merge_entities
+from .entity_judge import build_calibration_examples, judge_entities_with_llm
 from .evaluation import evaluate
 from .io import read_jsonl, validate_submission, write_jsonl
 from .llm import BigModelClient
@@ -217,6 +222,130 @@ def _cmd_validate(args: argparse.Namespace) -> None:
     print("VALID")
 
 
+def _cmd_judge_entities(args: argparse.Namespace) -> None:
+    train_path, test_path, ontology_path = _paths(args)
+    train = read_jsonl(train_path)
+    documents = read_jsonl(test_path if args.split == "a" else train_path)
+    documents_by_id = {str(row["pmc_id"]): row for row in documents}
+    candidates = read_jsonl(args.candidates)
+    ontology = HpoOntology.from_obo(ontology_path)
+    extractor = GazetteerExtractor(ontology, train)
+    calibration = build_calibration_examples(train, extractor, ontology)
+    client = BigModelClient(model=args.model, cache_dir=args.cache_dir)
+    predictions: list[dict] = []
+    progress_path = str(args.output) + ".progress"
+    completed = {
+        str(row["pmc_id"]): row
+        for row in read_jsonl(progress_path)
+    } if Path(progress_path).exists() else {}
+    for index, candidate_row in enumerate(candidates, 1):
+        pmc_id = str(candidate_row["pmc_id"])
+        if pmc_id in completed:
+            predictions.append(completed[pmc_id])
+            print(f"[{index}/{len(candidates)}] {pmc_id} (cached)", flush=True)
+            continue
+        document = documents_by_id.get(pmc_id)
+        if document is None:
+            raise ValueError(f"candidate document {pmc_id} is not in split {args.split}")
+        # During train probes, do not let the model see calibration labels from
+        # the article it is currently judging.
+        document_calibration = calibration
+        if args.split == "train":
+            other_documents = [
+                row for row in train if str(row["pmc_id"]) != pmc_id
+            ]
+            other_extractor = GazetteerExtractor(ontology, other_documents)
+            document_calibration = build_calibration_examples(
+                other_documents, other_extractor, ontology
+            )
+        print(
+            f"[{index}/{len(candidates)}] {pmc_id} "
+            f"({len(candidate_row.get('entities', []))} candidates)",
+            flush=True,
+        )
+        entities = judge_entities_with_llm(
+            document,
+            list(candidate_row.get("entities", [])),
+            ontology,
+            client,
+            document_calibration,
+            batch_size=args.batch_size,
+            calibration_per_label=args.calibration_per_label,
+            include_uncertain=args.include_uncertain,
+        )
+        association = candidate_row.get("association")
+        if not isinstance(association, list):
+            association = associate_by_proximity(document, entities)
+        predictions.append(
+            {
+                "pmc_id": document["pmc_id"],
+                "pmid": document.get("pmid"),
+                "entities": entities,
+                "association": association,
+            }
+        )
+        write_jsonl(progress_path, predictions)
+    write_jsonl(args.output, predictions)
+    print(f"wrote {args.output} ({len(predictions)} documents)")
+
+
+def _cmd_judge_associations(args: argparse.Namespace) -> None:
+    train_path, test_path, ontology_path = _paths(args)
+    train = read_jsonl(train_path)
+    documents = read_jsonl(test_path if args.split == "a" else train_path)
+    documents_by_id = {str(row["pmc_id"]): row for row in documents}
+    candidates = read_jsonl(args.candidates)
+    if args.limit is not None:
+        candidates = candidates[: args.limit]
+    ontology = HpoOntology.from_obo(ontology_path)
+    calibration = build_association_calibration_examples(train, ontology)
+    client = BigModelClient(model=args.model, cache_dir=args.cache_dir)
+    predictions: list[dict] = []
+    progress_path = str(args.output) + ".progress"
+    completed = {
+        str(row["pmc_id"]): row
+        for row in read_jsonl(progress_path)
+    } if Path(progress_path).exists() else {}
+    for index, candidate_row in enumerate(candidates, 1):
+        pmc_id = str(candidate_row["pmc_id"])
+        if pmc_id in completed:
+            predictions.append(completed[pmc_id])
+            print(f"[{index}/{len(candidates)}] {pmc_id} (cached)", flush=True)
+            continue
+        document = documents_by_id.get(pmc_id)
+        if document is None:
+            raise ValueError(f"candidate document {pmc_id} is not in split {args.split}")
+        entities = list(candidate_row.get("entities", []))
+        print(
+            f"[{index}/{len(candidates)}] {pmc_id} "
+            f"({len(entities)} entities, {len(document.get('patient', []))} patients)",
+            flush=True,
+        )
+        association = associate_values_calibrated_with_llm(
+            document,
+            entities,
+            ontology,
+            client,
+            calibration,
+            batch_size=args.batch_size,
+            calibration_per_label=args.calibration_per_label,
+            include_uncertain=args.include_uncertain,
+            exclude_calibration_pmc_id=pmc_id if args.split == "train" else None,
+            structure_multi_patient=not args.no_structure_filter,
+        )
+        predictions.append(
+            {
+                "pmc_id": document["pmc_id"],
+                "pmid": document.get("pmid"),
+                "entities": entities,
+                "association": association,
+            }
+        )
+        write_jsonl(progress_path, predictions)
+    write_jsonl(args.output, predictions)
+    print(f"wrote {args.output} ({len(predictions)} documents)")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="patientphex-solver")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -268,6 +397,38 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--expected", required=True)
     validate.add_argument("--predicted", required=True)
     validate.set_defaults(func=_cmd_validate)
+
+    judge = subparsers.add_parser(
+        "judge-entities",
+        help="filter an entity candidate JSONL with a calibrated API model",
+    )
+    judge.add_argument("--data-dir", default="PatientPheX-V1-A")
+    judge.add_argument("--split", choices=["a", "train"], default="a")
+    judge.add_argument("--candidates", required=True)
+    judge.add_argument("--output", required=True)
+    judge.add_argument("--model", default="modelH")
+    judge.add_argument("--cache-dir", default="cache/llm")
+    judge.add_argument("--batch-size", type=int, default=40)
+    judge.add_argument("--calibration-per-label", type=int, default=10)
+    judge.add_argument("--include-uncertain", action="store_true")
+    judge.set_defaults(func=_cmd_judge_entities)
+
+    judge_associations = subparsers.add_parser(
+        "judge-associations",
+        help="assign candidate phenotype values to patients with a calibrated API model",
+    )
+    judge_associations.add_argument("--data-dir", default="PatientPheX-V1-A")
+    judge_associations.add_argument("--split", choices=["a", "train"], default="a")
+    judge_associations.add_argument("--candidates", required=True)
+    judge_associations.add_argument("--output", required=True)
+    judge_associations.add_argument("--model", default="modelS5_6S")
+    judge_associations.add_argument("--cache-dir", default="cache/llm")
+    judge_associations.add_argument("--batch-size", type=int, default=30)
+    judge_associations.add_argument("--calibration-per-label", type=int, default=8)
+    judge_associations.add_argument("--include-uncertain", action="store_true")
+    judge_associations.add_argument("--no-structure-filter", action="store_true")
+    judge_associations.add_argument("--limit", type=int, default=None)
+    judge_associations.set_defaults(func=_cmd_judge_associations)
     return parser
 
 

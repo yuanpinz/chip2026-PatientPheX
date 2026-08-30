@@ -96,6 +96,14 @@ def parse_json_response(text: str) -> Any:
         if not starts:
             raise
         start = min(starts)
+        # Some models append a second JSON value or a prose explanation after
+        # the requested object. Decode the first complete value instead of
+        # extending to the final closing delimiter and producing "Extra data".
+        try:
+            value, _ = json.JSONDecoder().raw_decode(candidate[start:])
+            return value
+        except json.JSONDecodeError:
+            pass
         closing = "}" if candidate[start] == "{" else "]"
         end = candidate.rfind(closing)
         if end <= start:
