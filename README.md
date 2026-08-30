@@ -112,6 +112,51 @@ uv run patientphex-solver judge-associations \
   --output outputs/pred_a_calibrated.jsonl
 ```
 
+如果已经用官方 PhenoTagger CNN 生成了原始 JSONL，可以用下面的保守路径补充词典遗漏的实体。
+默认规则由严格留一验证选择：只保留高置信、长度至少 6 的候选，且不与已有实体 span 重叠；同一 HPO
+ID 在一篇文章中最多补充 10 次。`--additions-output` 用于把新增项单独送入 API，避免 API 重判已有词典实体。
+
+```bash
+uv run patientphex-solver fuse-cnn-entities \
+  --base outputs/pred_a_v7_entity_consensus.jsonl \
+  --cnn outputs/phenotagger_cnn_a_raw.jsonl \
+  --output outputs/pred_a_cnn_fused.jsonl \
+  --additions-output outputs/pred_a_cnn_additions.jsonl
+
+uv run patientphex-solver judge-entities \
+  --split a \
+  --candidates outputs/pred_a_cnn_additions.jsonl \
+  --model modelH \
+  --include-uncertain \
+  --output outputs/pred_a_cnn_additions_judged_h_uncertain.jsonl
+
+uv run patientphex-solver merge-entities \
+  --base outputs/pred_a_v7_entity_consensus.jsonl \
+  --additions outputs/pred_a_cnn_additions_judged_h_uncertain.jsonl \
+  --output outputs/pred_a_cnn_judged_entities.jsonl
+```
+
+在新增实体上分别运行 `modelS5_6S` 和 `modelH` 的联合患者关联后，可用既有的患者数量融合规则生成结果：
+
+```bash
+uv run patientphex-solver judge-associations \
+  --split a --candidates outputs/pred_a_cnn_judged_entities.jsonl \
+  --joint --include-uncertain --model modelS5_6S \
+  --output outputs/pred_a_cnn_s56_joint.jsonl
+
+uv run patientphex-solver judge-associations \
+  --split a --candidates outputs/pred_a_cnn_judged_entities.jsonl \
+  --joint --model modelH \
+  --output outputs/pred_a_cnn_modelh_joint_strict.jsonl
+
+uv run patientphex-solver fuse-associations \
+  --expected PatientPheX-V1-A/PatientPheX-A.jsonl \
+  --base outputs/pred_a_cnn_judged_entities.jsonl \
+  --primary outputs/pred_a_cnn_s56_joint.jsonl \
+  --secondary outputs/pred_a_cnn_modelh_joint_strict.jsonl \
+  --output outputs/pred_a_cnn_final_fused.jsonl
+```
+
 也可以用 held-out 训练文章作为 few-shot 示例，让 API 发现词典遗漏的候选实体。模型只负责提出原文 span，HPO ID 仍由本地本体链接器校验：
 
 ```bash

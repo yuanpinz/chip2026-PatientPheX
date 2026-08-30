@@ -7,6 +7,7 @@ from .association import (
     associate_patient_structured_with_llm,
     associate_with_llm,
 )
+from .cnn_fusion import CnnFusionConfig, cnn_additions, fuse_cnn_entities
 from .entities import ExtractorConfig, GazetteerExtractor, merge_entities
 from .evaluation import evaluate
 from .io import read_jsonl, validate_submission, write_jsonl
@@ -20,6 +21,7 @@ from .patient_phenotypes import discover_patient_phenotypes_with_llm
 
 __all__ = [
     "BigModelClient",
+    "CnnFusionConfig",
     "ExtractorConfig",
     "GazetteerExtractor",
     "HpoOntology",
@@ -28,10 +30,12 @@ __all__ = [
     "associate_joint_with_llm",
     "associate_patient_structured_with_llm",
     "associate_with_llm",
+    "cnn_additions",
     "discover_entities_article_with_llm",
     "discover_entities_with_llm",
     "discover_patient_phenotypes_with_llm",
     "evaluate",
+    "fuse_cnn_entities",
     "merge_entities",
     "read_jsonl",
     "validate_submission",

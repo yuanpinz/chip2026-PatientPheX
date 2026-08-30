@@ -17,6 +17,7 @@ from .association_judge import (
     associate_values_joint_calibrated_with_llm,
     build_association_calibration_examples,
 )
+from .cnn_fusion import CnnFusionConfig, fuse_cnn_entities
 from .entities import ExtractorConfig, GazetteerExtractor, merge_entities
 from .entity_judge import build_calibration_examples, judge_entities_with_llm
 from .evaluation import evaluate
@@ -236,6 +237,64 @@ def _cmd_fuse_associations(args: argparse.Namespace) -> None:
     errors = validate_submission(predictions, expected)
     if errors:
         raise SystemExit("submission validation failed:\n" + "\n".join(errors[:30]))
+    write_jsonl(args.output, predictions)
+    print(f"wrote {args.output} ({len(predictions)} documents)")
+
+
+def _cmd_fuse_cnn_entities(args: argparse.Namespace) -> None:
+    base_rows = read_jsonl(args.base)
+    predictions = fuse_cnn_entities(
+        base_rows,
+        read_jsonl(args.cnn),
+        CnnFusionConfig(
+            min_score=args.min_score,
+            min_text_length=args.min_text_length,
+            max_per_identifier=args.max_per_identifier,
+            avoid_existing_overlap=not args.allow_overlap,
+            new_identifiers_only=args.new_identifiers_only,
+        ),
+    )
+    write_jsonl(args.output, predictions)
+    additions = sum(
+        max(0, len(row.get("entities", [])) - len(base.get("entities", [])))
+        for row, base in zip(predictions, base_rows)
+    )
+    if args.additions_output:
+        additions_rows = []
+        for row, base in zip(predictions, base_rows):
+            additions_rows.append(
+                {
+                    "pmc_id": row["pmc_id"],
+                    "pmid": row.get("pmid"),
+                    "entities": list(row.get("entities", []))[len(base.get("entities", [])) :],
+                    "association": [],
+                }
+            )
+        write_jsonl(args.additions_output, additions_rows)
+    print(f"wrote {args.output} ({len(predictions)} documents, {additions} CNN additions)")
+
+
+def _cmd_merge_entities(args: argparse.Namespace) -> None:
+    base_rows = read_jsonl(args.base)
+    additions_by_id = {
+        str(row["pmc_id"]): row for row in read_jsonl(args.additions)
+    }
+    predictions = []
+    for base in base_rows:
+        additions = additions_by_id.get(str(base["pmc_id"]))
+        if additions is None:
+            raise ValueError(f"missing additions row for PMC {base['pmc_id']}")
+        predictions.append(
+            {
+                "pmc_id": base["pmc_id"],
+                "pmid": base.get("pmid"),
+                "entities": merge_entities(
+                    list(base.get("entities", [])),
+                    list(additions.get("entities", [])),
+                ),
+                "association": list(base.get("association", [])),
+            }
+        )
     write_jsonl(args.output, predictions)
     print(f"wrote {args.output} ({len(predictions)} documents)")
 
@@ -487,6 +546,42 @@ def build_parser() -> argparse.ArgumentParser:
     fuse.add_argument("--secondary", required=True, help="joint association JSONL")
     fuse.add_argument("--output", required=True)
     fuse.set_defaults(func=_cmd_fuse_associations)
+
+    fuse_cnn = subparsers.add_parser(
+        "fuse-cnn-entities",
+        help="add conservative high-confidence PhenoTagger CNN entities",
+    )
+    fuse_cnn.add_argument("--base", required=True, help="base entity JSONL")
+    fuse_cnn.add_argument("--cnn", required=True, help="raw PhenoTagger CNN JSONL")
+    fuse_cnn.add_argument("--output", required=True)
+    fuse_cnn.add_argument(
+        "--additions-output",
+        default=None,
+        help="optional JSONL containing only CNN additions for API judging",
+    )
+    fuse_cnn.add_argument("--min-score", type=float, default=0.9997)
+    fuse_cnn.add_argument("--min-text-length", type=int, default=6)
+    fuse_cnn.add_argument("--max-per-identifier", type=int, default=10)
+    fuse_cnn.add_argument(
+        "--allow-overlap",
+        action="store_true",
+        help="allow CNN spans overlapping existing entities",
+    )
+    fuse_cnn.add_argument(
+        "--new-identifiers-only",
+        action="store_true",
+        help="only add HPO IDs absent from the base document",
+    )
+    fuse_cnn.set_defaults(func=_cmd_fuse_cnn_entities)
+
+    merge = subparsers.add_parser(
+        "merge-entities",
+        help="merge an additions JSONL into a base entity JSONL",
+    )
+    merge.add_argument("--base", required=True)
+    merge.add_argument("--additions", required=True)
+    merge.add_argument("--output", required=True)
+    merge.set_defaults(func=_cmd_merge_entities)
 
     judge = subparsers.add_parser(
         "judge-entities",

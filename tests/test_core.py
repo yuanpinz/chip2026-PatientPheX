@@ -9,6 +9,11 @@ from patientphex_solver.association_judge import (
     associate_values_joint_calibrated_with_llm,
     build_association_calibration_examples,
 )
+from patientphex_solver.cnn_fusion import (
+    CnnFusionConfig,
+    cnn_additions,
+    fuse_cnn_entities,
+)
 from patientphex_solver.entities import GazetteerExtractor
 from patientphex_solver.entity_judge import (
     build_calibration_examples,
@@ -31,6 +36,94 @@ from patientphex_solver.patient_phenotypes import (
 
 def test_parse_json_response_with_markdown_fence() -> None:
     assert parse_json_response('```json\n{"ok": true}\n```') == {"ok": True}
+
+
+def test_cnn_fusion_filters_overlap_and_caps_repeated_ids() -> None:
+    base = [
+        {
+            "identifier": "HP:1",
+            "type": "Phenotype",
+            "offset": 10,
+            "length": 8,
+            "text": "existing",
+            "note": None,
+        }
+    ]
+    raw = [
+        {
+            "identifier": "HP:2",
+            "type": "Phenotype",
+            "offset": 10,
+            "length": 4,
+            "text": "exis",
+            "note": None,
+            "score": 1.0,
+        },
+        {
+            "identifier": "HP:2",
+            "type": "Phenotype",
+            "offset": 30,
+            "length": 6,
+            "text": "second",
+            "note": None,
+            "score": 0.9998,
+        },
+        {
+            "identifier": "HP:2",
+            "type": "Phenotype",
+            "offset": 50,
+            "length": 6,
+            "text": "thirdx",
+            "note": None,
+            "score": 0.9999,
+        },
+    ]
+    additions = cnn_additions(
+        base,
+        raw,
+        CnnFusionConfig(min_score=0.9997, min_text_length=6, max_per_identifier=1),
+    )
+    assert [(item["offset"], item["text"]) for item in additions] == [(50, "thirdx")]
+
+
+def test_cnn_fusion_preserves_association_and_strips_score() -> None:
+    base = [
+        {
+            "pmc_id": "p1",
+            "pmid": "m1",
+            "entities": [],
+            "association": [{"patient_id": "P1", "phenotype": ["HP:1"]}],
+        }
+    ]
+    cnn = [
+        {
+            "pmc_id": "p1",
+            "pmid": "m1",
+            "entities": [
+                {
+                    "identifier": "HP:2",
+                    "type": "Phenotype",
+                    "offset": 0,
+                    "length": 6,
+                    "text": "finding",
+                    "note": None,
+                    "score": 1.0,
+                }
+            ],
+        }
+    ]
+    result = fuse_cnn_entities(base, cnn)
+    assert result[0]["association"] == base[0]["association"]
+    assert result[0]["entities"] == [
+        {
+            "identifier": "HP:2",
+            "type": "Phenotype",
+            "offset": 0,
+            "length": 6,
+            "text": "finding",
+            "note": None,
+        }
+    ]
 
 
 def test_parse_json_response_ignores_trailing_explanation() -> None:
