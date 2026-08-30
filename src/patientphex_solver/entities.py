@@ -90,6 +90,13 @@ class SurfaceStats:
 @dataclass(slots=True)
 class ExtractorConfig:
     train_min_precision: float = 0.40
+    # Recover high-value, unambiguous HPO aliases that are noisy in the training
+    # corpus but still have positive supervision. This is deliberately stricter
+    # than accepting arbitrary low-precision training surfaces.
+    recover_exact_train_aliases: bool = True
+    recovered_min_positive: int = 1
+    recovered_min_precision: float = 0.10
+    recovered_preferred_only: bool = False
     hpo_min_chars: int = 4
     hpo_min_alpha: int = 2
     include_hpo_synonyms: bool = True
@@ -211,6 +218,26 @@ class GazetteerExtractor:
                 continue
             self.alias_identifiers[alias].update(identifiers)
             self.alias_source.setdefault(alias, "hpo")
+
+        if self.config.recover_exact_train_aliases:
+            for alias, stats in self.surface_stats.items():
+                identifiers = self.ontology.aliases.get(alias, set())
+                if len(identifiers) != 1:
+                    continue
+                if self.config.recovered_preferred_only and (
+                    alias not in self.ontology.preferred_aliases
+                ):
+                    continue
+                if len(alias) < self.config.hpo_min_chars:
+                    continue
+                if sum(character.isalpha() for character in alias) < self.config.hpo_min_alpha:
+                    continue
+                if stats.positive_labels < self.config.recovered_min_positive:
+                    continue
+                if stats.precision < self.config.recovered_min_precision:
+                    continue
+                self.alias_identifiers[alias].update(identifiers)
+                self.alias_source.setdefault(alias, "recovered-train-hpo")
 
         dictionary_path = self.config.phenotagger_dictionary
         if dictionary_path:

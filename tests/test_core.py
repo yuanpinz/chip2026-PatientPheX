@@ -137,6 +137,49 @@ is_a: HP:0000118 ! root
     assert predicted[0]["identifier"] == "HP:0000002"
 
 
+def test_low_frequency_preferred_hpo_name_is_recovered(tmp_path) -> None:
+    obo = tmp_path / "small.obo"
+    obo.write_text(
+        """format-version: 1.2
+
+[Term]
+id: HP:0000118
+name: Phenotypic abnormality
+
+[Term]
+id: HP:0001250
+name: Seizure
+is_a: HP:0000118 ! root
+""",
+        encoding="utf-8",
+    )
+    ontology = HpoOntology.from_obo(obo)
+    training = [
+        {
+            "pmc_id": "train",
+            "full_text": [
+                {"offset": index * 20, "text": "Seizure."} for index in range(10)
+            ],
+            "entities": [
+                {
+                    "identifier": "HP:0001250",
+                    "offset": 0,
+                    "length": 7,
+                    "text": "Seizure",
+                    "note": None,
+                }
+            ],
+        }
+    ]
+    extractor = GazetteerExtractor(ontology, training)
+    assert extractor.surface_stats["seizure"].precision == 0.1
+    assert extractor.alias_source["seizure"] == "recovered-train-hpo"
+    predicted = extractor.extract_document(
+        {"pmc_id": "article", "full_text": [{"offset": 0, "text": "Seizure."}]}
+    )
+    assert predicted[0]["identifier"] == "HP:0001250"
+
+
 def test_negation_requires_a_direct_scope(tmp_path) -> None:
     obo = tmp_path / "small.obo"
     obo.write_text(
