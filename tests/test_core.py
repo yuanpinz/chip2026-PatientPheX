@@ -10,10 +10,14 @@ from patientphex_solver.io import validate_submission
 from patientphex_solver.llm import parse_json_response
 from patientphex_solver.llm_entities import discover_entities_article_with_llm
 from patientphex_solver.ontology import HpoOntology
+from patientphex_solver.patient_phenotypes import (
+    _identifier_for_finding,
+    discover_patient_phenotypes_with_llm,
+)
 
 
 def test_parse_json_response_with_markdown_fence() -> None:
-    assert parse_json_response("```json\n{\"ok\": true}\n```") == {"ok": True}
+    assert parse_json_response('```json\n{"ok": true}\n```') == {"ok": True}
 
 
 def test_hpo_alias_and_alt_id_resolution(tmp_path) -> None:
@@ -88,7 +92,9 @@ is_a: HP:0000118 ! root
     assert extractor.extract_document(unrelated) == []
 
 
-def test_article_entity_discovery_aligns_offsets_and_requires_exact_text_alias(tmp_path) -> None:
+def test_article_entity_discovery_aligns_offsets_and_requires_exact_text_alias(
+    tmp_path,
+) -> None:
     obo = tmp_path / "small.obo"
     obo.write_text(
         """format-version: 1.2
@@ -130,7 +136,11 @@ is_a: HP:0000118 ! root
     document = {
         "pmc_id": "article",
         "full_text": [
-            {"section_type": "CASE", "offset": 0, "text": "Severe anxiety was observed."}
+            {
+                "section_type": "CASE",
+                "offset": 0,
+                "text": "Severe anxiety was observed.",
+            }
         ],
     }
     additions = discover_entities_article_with_llm(
@@ -149,6 +159,129 @@ is_a: HP:0000118 ! root
             "note": None,
         }
     ]
+
+
+def test_direct_patient_phenotypes_require_exact_evidence_and_known_hpo(
+    tmp_path,
+) -> None:
+    obo = tmp_path / "small.obo"
+    obo.write_text(
+        """format-version: 1.2
+
+[Term]
+id: HP:0000118
+name: Phenotypic abnormality
+
+[Term]
+id: HP:0001250
+name: Seizure
+synonym: "Seizures" EXACT []
+is_a: HP:0000118 ! root
+""",
+        encoding="utf-8",
+    )
+
+    class FakeClient:
+        def chat_json(self, messages, *, max_tokens):
+            return {
+                "assignments": {
+                    "P1": [
+                        {
+                            "passage_index": 0,
+                            "start": 0,
+                            "text": "seizures",
+                            "canonical": "Seizure",
+                            "hpo_id": "HP:0001250",
+                        },
+                        {
+                            "passage_index": 0,
+                            "start": 40,
+                            "text": "invented finding",
+                            "canonical": "Seizure",
+                            "hpo_id": "HP:0001250",
+                        },
+                    ]
+                }
+            }
+
+    ontology = HpoOntology.from_obo(obo)
+    extractor = GazetteerExtractor(ontology, [])
+    document = {
+        "pmc_id": "article",
+        "patient": [{"patient_id": "P1", "mention": []}],
+        "full_text": [
+            {"section_type": "CASE", "offset": 10, "text": "The patient had seizures."}
+        ],
+    }
+    additions, associations = discover_patient_phenotypes_with_llm(
+        document, ontology, extractor, FakeClient()
+    )
+    assert additions == [
+        {
+            "identifier": "HP:0001250",
+            "type": "Phenotype",
+            "offset": 26,
+            "length": 8,
+            "text": "seizures",
+            "note": None,
+        }
+    ]
+    assert associations == [{"patient_id": "P1", "phenotype": ["HP:0001250"]}]
+
+
+def test_direct_patient_finding_prefers_compatible_explicit_hpo_id(tmp_path) -> None:
+    obo = tmp_path / "small.obo"
+    obo.write_text(
+        """format-version: 1.2
+
+[Term]
+id: HP:0000118
+name: Phenotypic abnormality
+
+[Term]
+id: HP:0001900
+name: Hemoglobin abnormality
+is_a: HP:0000118 ! root
+
+[Term]
+id: HP:0040217
+name: Increased hemoglobin A1c
+is_a: HP:0000118 ! root
+""",
+        encoding="utf-8",
+    )
+    ontology = HpoOntology.from_obo(obo)
+    training = [
+        {
+            "pmc_id": "train",
+            "full_text": [
+                {"offset": 0, "text": "Increased hemoglobin A1c was observed."}
+            ],
+            "entities": [
+                {
+                    "identifier": "HP:0001900",
+                    "offset": 0,
+                    "length": 25,
+                    "text": "Increased hemoglobin A1c",
+                    "note": None,
+                }
+            ],
+        }
+    ]
+    extractor = GazetteerExtractor(ontology, training)
+
+    assert (
+        _identifier_for_finding(
+            {
+                "text": "Increased hemoglobin A1c",
+                "canonical": "Increased hemoglobin A1c",
+                "hpo_id": "HP:0040217",
+            },
+            ontology,
+            extractor,
+        )
+        == "HP:0040217"
+    )
 
 
 def test_evaluation_counts_negative_prediction_as_false_positive() -> None:
@@ -206,6 +339,28 @@ def test_submission_validation_accepts_empty_prediction_fields() -> None:
 def test_parse_json_response_recovers_truncated_assignments() -> None:
     assert parse_json_response('{"assignments":{"P1":[1,2],"P2":[3]') == {
         "assignments": {"P1": [1, 2], "P2": [3]}
+    }
+
+
+def test_parse_json_response_recovers_truncated_patient_findings() -> None:
+    response = parse_json_response(
+        '{"assignments":{"P1":['
+        '{"passage_index":2,"start":4,"text":"seizures",'
+        '"canonical":"Seizure","hpo_id":"HP:0001250"},'
+        '{"passage_index":2,"start":20,"text":"unfinished"'
+    )
+    assert response == {
+        "assignments": {
+            "P1": [
+                {
+                    "passage_index": 2,
+                    "start": 4,
+                    "text": "seizures",
+                    "canonical": "Seizure",
+                    "hpo_id": "HP:0001250",
+                }
+            ]
+        }
     }
 
 

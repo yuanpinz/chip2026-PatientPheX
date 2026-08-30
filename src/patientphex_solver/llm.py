@@ -32,15 +32,44 @@ def parse_json_response(text: str) -> Any:
         # Recover it when a service truncates the closing JSON delimiters.
         index_match = _INDEX_LIST_RE.search(candidate)
         if index_match:
-            values = [
-                int(value)
-                for value in re.findall(r"\d+", index_match.group(1))
-            ]
+            values = [int(value) for value in re.findall(r"\d+", index_match.group(1))]
             return {"entity_indices": values}
         assignments_start = re.search(r'"assignments"\s*:\s*\{', candidate)
         if assignments_start:
+            object_assignments: dict[str, list[dict[str, Any]]] = {}
+            assignment_text = candidate[assignments_start.end() :]
+            patient_entries = list(
+                re.finditer(r'"([^"\\]+)"\s*:\s*\[', assignment_text)
+            )
+            for entry_index, entry in enumerate(patient_entries):
+                end = (
+                    patient_entries[entry_index + 1].start()
+                    if entry_index + 1 < len(patient_entries)
+                    else len(assignment_text)
+                )
+                rows: list[dict[str, Any]] = []
+                for match in re.finditer(
+                    r"\{[^{}]*\}", assignment_text[entry.end() : end], re.DOTALL
+                ):
+                    try:
+                        value = json.loads(match.group(0))
+                    except json.JSONDecodeError:
+                        continue
+                    if (
+                        isinstance(value, dict)
+                        and "passage_index" in value
+                        and "text" in value
+                    ):
+                        rows.append(value)
+                if rows:
+                    object_assignments[entry.group(1)] = rows
+            if object_assignments:
+                return {"assignments": object_assignments}
+
             assignments: dict[str, list[int]] = {}
-            for match in _ASSIGNMENT_ENTRY_RE.finditer(candidate, assignments_start.end()):
+            for match in _ASSIGNMENT_ENTRY_RE.finditer(
+                candidate, assignments_start.end()
+            ):
                 values = [int(value) for value in re.findall(r"\d+", match.group(2))]
                 assignments[match.group(1)] = values
             if assignments:
@@ -59,7 +88,11 @@ def parse_json_response(text: str) -> Any:
                 if isinstance(value, dict) and "text" in value:
                     objects.append(value)
             return {"entities": objects}
-        starts = [position for position in (candidate.find("{"), candidate.find("[")) if position >= 0]
+        starts = [
+            position
+            for position in (candidate.find("{"), candidate.find("["))
+            if position >= 0
+        ]
         if not starts:
             raise
         start = min(starts)
@@ -81,13 +114,17 @@ class BigModelClient:
         retries: int = 3,
     ) -> None:
         self.model = model
-        self.endpoint = endpoint or os.environ.get("PATIENTPHEX_API_ENDPOINT", DEFAULT_ENDPOINT)
+        self.endpoint = endpoint or os.environ.get(
+            "PATIENTPHEX_API_ENDPOINT", DEFAULT_ENDPOINT
+        )
         self.cache_dir = Path(cache_dir)
         self.timeout = timeout
         self.retries = retries
 
     def _cache_path(self, payload: dict[str, Any]) -> Path:
-        material = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        material = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode(
+            "utf-8"
+        )
         digest = hashlib.sha256(material).hexdigest()
         return self.cache_dir / self.model / f"{digest}.json"
 
@@ -121,7 +158,9 @@ class BigModelClient:
                     body = response.json()
                 text = body.get("result")
                 if not text:
-                    text = (((body.get("choices") or [{}])[0].get("message") or {}).get("content"))
+                    text = ((body.get("choices") or [{}])[0].get("message") or {}).get(
+                        "content"
+                    )
                 if not isinstance(text, str) or not text.strip():
                     raise RuntimeError(f"model returned no text: {body}")
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -140,7 +179,9 @@ class BigModelClient:
                 last_error = exc
                 if attempt + 1 < self.retries:
                     time.sleep(2**attempt)
-        raise RuntimeError(f"model call failed after {self.retries} attempts") from last_error
+        raise RuntimeError(
+            f"model call failed after {self.retries} attempts"
+        ) from last_error
 
     def chat_json(
         self,

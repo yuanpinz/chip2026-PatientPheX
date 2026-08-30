@@ -20,6 +20,7 @@ from .llm_entities import (
     discover_entities_with_llm,
 )
 from .ontology import HpoOntology
+from .patient_phenotypes import discover_patient_phenotypes_with_llm
 
 
 def _paths(args: argparse.Namespace) -> tuple[Path, Path, Path]:
@@ -64,10 +65,22 @@ def _predict(
     for index, document in enumerate(documents, 1):
         if str(document["pmc_id"]) in predictions_by_id:
             predictions.append(predictions_by_id[str(document["pmc_id"])])
-            print(f"[{index}/{len(documents)}] {document['pmc_id']} (cached)", flush=True)
+            print(
+                f"[{index}/{len(documents)}] {document['pmc_id']} (cached)", flush=True
+            )
             continue
         print(f"[{index}/{len(documents)}] {document['pmc_id']}", flush=True)
         entities = extractor.extract_document(document)
+        direct_association = None
+        if association_mode == "patient-direct":
+            if client is None:
+                raise ValueError("--association patient-direct requires an API client")
+            try:
+                _, direct_association = discover_patient_phenotypes_with_llm(
+                    document, ontology, extractor, client
+                )
+            except (json.JSONDecodeError, RuntimeError) as exc:
+                print(f"  direct patient extraction failed: {exc}", flush=True)
         if use_llm and client is not None:
             discover = (
                 discover_entities_article_with_llm
@@ -75,10 +88,16 @@ def _predict(
                 else discover_entities_with_llm
             )
             additions = discover(
-                document, entities, ontology, client, id_frequency=extractor.id_frequency
+                document,
+                entities,
+                ontology,
+                client,
+                id_frequency=extractor.id_frequency,
             )
             entities = merge_entities(entities, additions)
-        if association_mode in {
+        if direct_association is not None:
+            association = direct_association
+        elif association_mode in {
             "llm",
             "patient-structured",
             "joint-llm",
@@ -91,7 +110,9 @@ def _predict(
                 association = (
                     associate_joint_structured_with_llm(document, entities, client)
                     if association_mode == "joint-structured"
-                    else associate_patient_structured_with_llm(document, entities, client)
+                    else associate_patient_structured_with_llm(
+                        document, entities, client
+                    )
                     if association_mode == "patient-structured"
                     else associate_joint_with_llm(document, entities, client)
                     if association_mode in {"joint-llm", "joint-intersection"}
@@ -111,7 +132,10 @@ def _predict(
                             if value in proximity_by_id.get(patient_id, set())
                         ]
             except RuntimeError as exc:
-                print(f"  LLM association failed; using proximity fallback: {exc}", flush=True)
+                print(
+                    f"  LLM association failed; using proximity fallback: {exc}",
+                    flush=True,
+                )
                 association = associate_by_proximity(document, entities)
         else:
             association = associate_by_proximity(document, entities)
@@ -139,12 +163,15 @@ def _cmd_predict(args: argparse.Namespace) -> None:
     )
     client = (
         BigModelClient(model=args.model, cache_dir=args.cache_dir)
-        if args.use_llm or args.association in {
+        if args.use_llm
+        or args.association
+        in {
             "llm",
             "patient-structured",
             "joint-llm",
             "joint-structured",
             "joint-intersection",
+            "patient-direct",
         }
         else None
     )
@@ -211,6 +238,7 @@ def build_parser() -> argparse.ArgumentParser:
             "joint-llm",
             "joint-structured",
             "joint-intersection",
+            "patient-direct",
         ],
         default="joint-structured",
     )
@@ -218,12 +246,16 @@ def build_parser() -> argparse.ArgumentParser:
     predict.add_argument("--cache-dir", default="cache/llm")
     predict.set_defaults(func=_cmd_predict)
 
-    scoring = subparsers.add_parser("evaluate", help="evaluate predictions against gold JSONL")
+    scoring = subparsers.add_parser(
+        "evaluate", help="evaluate predictions against gold JSONL"
+    )
     scoring.add_argument("--gold", required=True)
     scoring.add_argument("--predicted", required=True)
     scoring.set_defaults(func=_cmd_evaluate)
 
-    validate = subparsers.add_parser("validate", help="validate JSONL submission schema")
+    validate = subparsers.add_parser(
+        "validate", help="validate JSONL submission schema"
+    )
     validate.add_argument("--expected", required=True)
     validate.add_argument("--predicted", required=True)
     validate.set_defaults(func=_cmd_validate)

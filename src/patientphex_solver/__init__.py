@@ -16,6 +16,7 @@ from .llm_entities import (
     discover_entities_with_llm,
 )
 from .ontology import HpoOntology
+from .patient_phenotypes import discover_patient_phenotypes_with_llm
 
 __all__ = [
     "BigModelClient",
@@ -29,6 +30,7 @@ __all__ = [
     "associate_with_llm",
     "discover_entities_article_with_llm",
     "discover_entities_with_llm",
+    "discover_patient_phenotypes_with_llm",
     "evaluate",
     "merge_entities",
     "read_jsonl",
