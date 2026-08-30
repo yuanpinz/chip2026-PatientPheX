@@ -6,6 +6,7 @@ from patientphex_solver.association import (
 )
 from patientphex_solver.association_judge import (
     associate_values_calibrated_with_llm,
+    associate_values_joint_calibrated_with_llm,
     build_association_calibration_examples,
 )
 from patientphex_solver.entities import GazetteerExtractor
@@ -16,7 +17,10 @@ from patientphex_solver.entity_judge import (
 from patientphex_solver.evaluation import evaluate
 from patientphex_solver.io import validate_submission
 from patientphex_solver.llm import parse_json_response
-from patientphex_solver.llm_entities import discover_entities_article_with_llm
+from patientphex_solver.llm_entities import (
+    discover_entities_article_with_llm,
+    discover_entities_fewshot_with_llm,
+)
 from patientphex_solver.ontology import HpoOntology
 from patientphex_solver.patient_phenotypes import (
     _identifier_for_finding,
@@ -203,6 +207,139 @@ is_a: HP:0000118 ! root
     assert association == [{"patient_id": "P1", "phenotype": ["HP:0001250"]}]
 
 
+def test_fewshot_entity_discovery_keeps_exact_span_and_id(tmp_path) -> None:
+    obo = tmp_path / "small.obo"
+    obo.write_text(
+        """format-version: 1.2
+
+[Term]
+id: HP:0000118
+name: Phenotypic abnormality
+
+[Term]
+id: HP:0001250
+name: Seizure
+is_a: HP:0000118 ! root
+""",
+        encoding="utf-8",
+    )
+    ontology = HpoOntology.from_obo(obo)
+    example = {
+        "pmc_id": "example",
+        "full_text": [
+            {"offset": 0, "section_type": "CASE", "text": "Seizure occurred."}
+        ],
+        "entities": [
+            {
+                "identifier": "HP:0001250",
+                "type": "Phenotype",
+                "offset": 0,
+                "length": 7,
+                "text": "Seizure",
+                "note": None,
+            }
+        ],
+    }
+    document = {
+        "pmc_id": "target",
+        "full_text": [
+            {
+                "offset": 100,
+                "section_type": "CASE",
+                "text": "The child developed seizures.",
+            }
+        ],
+    }
+
+    class FakeClient:
+        def chat_json(self, messages, *, max_tokens=8000):
+            assert "GOLD-STYLE EXAMPLES" in messages[1]["content"]
+            return {
+                "entities": [
+                    {
+                        "passage_index": 0,
+                        "start": 20,
+                        "text": "seizures",
+                        "identifier": "HP:0001250",
+                        "negated": False,
+                    }
+                ]
+            }
+
+    additions = discover_entities_fewshot_with_llm(
+        document, [], [example], ontology, FakeClient()
+    )
+    assert additions == [
+        {
+            "identifier": "HP:0001250",
+            "type": "Phenotype",
+            "offset": 120,
+            "length": 8,
+            "text": "seizures",
+            "note": None,
+        }
+    ]
+
+
+def test_joint_calibrated_association_returns_all_patient_keys(tmp_path) -> None:
+    obo = tmp_path / "small.obo"
+    obo.write_text(
+        """format-version: 1.2
+
+[Term]
+id: HP:0000118
+name: Phenotypic abnormality
+
+[Term]
+id: HP:0001250
+name: Seizure
+is_a: HP:0000118 ! root
+""",
+        encoding="utf-8",
+    )
+    ontology = HpoOntology.from_obo(obo)
+    document = {
+        "pmc_id": "target",
+        "patient": [
+            {"patient_id": "P1", "mention": [{"text": "Patient 1", "offset": 0, "length": 9}]},
+            {"patient_id": "P2", "mention": [{"text": "Patient 2", "offset": 20, "length": 9}]},
+        ],
+        "full_text": [
+            {
+                "offset": 0,
+                "section_type": "CASE",
+                "text": "Patient 1 had seizure. Patient 2 had no seizure.",
+            }
+        ],
+    }
+    entity = {
+        "identifier": "HP:0001250",
+        "type": "Phenotype",
+        "offset": 15,
+        "length": 7,
+        "text": "seizure",
+        "note": None,
+    }
+
+    class FakeClient:
+        def chat_json(self, messages, *, max_tokens=8000):
+            assert "LISTED PATIENTS" in messages[1]["content"]
+            return {"assignments": {"P1": [0], "P2": []}}
+
+    result = associate_values_joint_calibrated_with_llm(
+        document,
+        [entity],
+        ontology,
+        FakeClient(),
+        [],
+        structure_multi_patient=False,
+    )
+    assert result == [
+        {"patient_id": "P1", "phenotype": ["HP:0001250"]},
+        {"patient_id": "P2", "phenotype": []},
+    ]
+
+
 def test_hpo_alias_and_alt_id_resolution(tmp_path) -> None:
     obo = tmp_path / "small.obo"
     obo.write_text(
@@ -273,6 +410,45 @@ is_a: HP:0000118 ! root
     }
     assert "ASD" in [item["text"] for item in extractor.extract_document(expanded)]
     assert extractor.extract_document(unrelated) == []
+
+
+def test_trained_abbreviation_requires_expansion_by_default(tmp_path) -> None:
+    obo = tmp_path / "small.obo"
+    obo.write_text(
+        """format-version: 1.2
+
+[Term]
+id: HP:0000118
+name: Phenotypic abnormality
+
+[Term]
+id: HP:0001149
+name: Lattice corneal dystrophy
+is_a: HP:0000118 ! root
+""",
+        encoding="utf-8",
+    )
+    ontology = HpoOntology.from_obo(obo)
+    training = [
+        {
+            "pmc_id": "train",
+            "full_text": [
+                {"offset": 0, "text": "LCD was repeatedly observed."}
+            ],
+            "entities": [
+                {
+                    "identifier": "HP:0001149",
+                    "offset": 0,
+                    "length": 3,
+                    "text": "LCD",
+                    "note": None,
+                }
+            ],
+        }
+    ]
+    target = {"pmc_id": "target", "full_text": [{"offset": 0, "text": "LCD."}]}
+    strict = GazetteerExtractor(ontology, training)
+    assert strict.extract_document(target) == []
 
 
 def test_exact_ontology_alias_overrides_conflicting_training_surface(tmp_path) -> None:

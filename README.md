@@ -100,4 +100,26 @@ uv run patientphex-solver judge-associations \
   --output outputs/pred_a_final.jsonl
 ```
 
+联合校准关联会让多个患者在同一请求中竞争候选表型；`--include-uncertain` 会保留模型标记为边界情况的结果：
+
+```bash
+uv run patientphex-solver judge-associations \
+  --split a \
+  --candidates outputs/pred_a_v7_base.jsonl \
+  --joint \
+  --include-uncertain \
+  --model modelS5_6S \
+  --output outputs/pred_a_calibrated.jsonl
+```
+
+也可以用 held-out 训练文章作为 few-shot 示例，让 API 发现词典遗漏的候选实体。模型只负责提出原文 span，HPO ID 仍由本地本体链接器校验：
+
+```bash
+uv run patientphex-solver discover-entities \
+  --split a \
+  --candidates outputs/pred_a_v7_base.jsonl \
+  --model modelS5_6S \
+  --output outputs/pred_a_discovered.jsonl
+```
+
 所有 API 原始响应都按请求内容 SHA-256 缓存在 `cache/llm/`。该目录已被 `.gitignore` 排除，避免将数据或响应提交到 Git。

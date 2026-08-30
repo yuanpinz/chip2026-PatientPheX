@@ -14,6 +14,7 @@ from .association import (
 )
 from .association_judge import (
     associate_values_calibrated_with_llm,
+    associate_values_joint_calibrated_with_llm,
     build_association_calibration_examples,
 )
 from .entities import ExtractorConfig, GazetteerExtractor, merge_entities
@@ -23,6 +24,7 @@ from .io import read_jsonl, validate_submission, write_jsonl
 from .llm import BigModelClient
 from .llm_entities import (
     discover_entities_article_with_llm,
+    discover_entities_fewshot_with_llm,
     discover_entities_with_llm,
 )
 from .ontology import HpoOntology
@@ -321,7 +323,11 @@ def _cmd_judge_associations(args: argparse.Namespace) -> None:
             f"({len(entities)} entities, {len(document.get('patient', []))} patients)",
             flush=True,
         )
-        association = associate_values_calibrated_with_llm(
+        association = (
+            associate_values_joint_calibrated_with_llm
+            if args.joint
+            else associate_values_calibrated_with_llm
+        )(
             document,
             entities,
             ontology,
@@ -339,6 +345,63 @@ def _cmd_judge_associations(args: argparse.Namespace) -> None:
                 "pmid": document.get("pmid"),
                 "entities": entities,
                 "association": association,
+            }
+        )
+        write_jsonl(progress_path, predictions)
+    write_jsonl(args.output, predictions)
+    print(f"wrote {args.output} ({len(predictions)} documents)")
+
+
+def _cmd_discover_entities(args: argparse.Namespace) -> None:
+    train_path, test_path, ontology_path = _paths(args)
+    train = read_jsonl(train_path)
+    documents = read_jsonl(test_path if args.split == "a" else train_path)
+    documents_by_id = {str(row["pmc_id"]): row for row in documents}
+    candidates = read_jsonl(args.candidates)
+    if args.limit is not None:
+        candidates = candidates[: args.limit]
+    ontology = HpoOntology.from_obo(ontology_path)
+    extractor = GazetteerExtractor(ontology, train)
+    client = BigModelClient(model=args.model, cache_dir=args.cache_dir)
+    predictions: list[dict] = []
+    progress_path = str(args.output) + ".progress"
+    completed = {
+        str(row["pmc_id"]): row
+        for row in read_jsonl(progress_path)
+    } if Path(progress_path).exists() else {}
+    for index, candidate_row in enumerate(candidates, 1):
+        pmc_id = str(candidate_row["pmc_id"])
+        if pmc_id in completed:
+            predictions.append(completed[pmc_id])
+            print(f"[{index}/{len(candidates)}] {pmc_id} (cached)", flush=True)
+            continue
+        document = documents_by_id.get(pmc_id)
+        if document is None:
+            raise ValueError(f"candidate document {pmc_id} is not in split {args.split}")
+        known = list(candidate_row.get("entities", []))
+        examples = [row for row in train if str(row["pmc_id"]) != pmc_id]
+        print(
+            f"[{index}/{len(candidates)}] {pmc_id} ({len(known)} known entities)",
+            flush=True,
+        )
+        additions = discover_entities_fewshot_with_llm(
+            document,
+            known,
+            examples,
+            ontology,
+            client,
+            id_frequency=extractor.id_frequency,
+            max_chars=args.max_chars,
+            max_examples=args.max_examples,
+        )
+        predictions.append(
+            {
+                "pmc_id": document["pmc_id"],
+                "pmid": document.get("pmid"),
+                "base": known,
+                "additions": additions,
+                "entities": merge_entities(known, additions),
+                "association": candidate_row.get("association", []),
             }
         )
         write_jsonl(progress_path, predictions)
@@ -427,8 +490,24 @@ def build_parser() -> argparse.ArgumentParser:
     judge_associations.add_argument("--calibration-per-label", type=int, default=8)
     judge_associations.add_argument("--include-uncertain", action="store_true")
     judge_associations.add_argument("--no-structure-filter", action="store_true")
+    judge_associations.add_argument("--joint", action="store_true")
     judge_associations.add_argument("--limit", type=int, default=None)
     judge_associations.set_defaults(func=_cmd_judge_associations)
+
+    discover = subparsers.add_parser(
+        "discover-entities",
+        help="add few-shot passage-level API entities to a candidate JSONL",
+    )
+    discover.add_argument("--data-dir", default="PatientPheX-V1-A")
+    discover.add_argument("--split", choices=["a", "train"], default="a")
+    discover.add_argument("--candidates", required=True)
+    discover.add_argument("--output", required=True)
+    discover.add_argument("--model", default="modelS5_6S")
+    discover.add_argument("--cache-dir", default="cache/llm")
+    discover.add_argument("--max-chars", type=int, default=6500)
+    discover.add_argument("--max-examples", type=int, default=5)
+    discover.add_argument("--limit", type=int, default=None)
+    discover.set_defaults(func=_cmd_discover_entities)
     return parser
 
 

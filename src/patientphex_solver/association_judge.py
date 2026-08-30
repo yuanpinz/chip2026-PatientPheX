@@ -185,6 +185,28 @@ def _candidate_rows(
     return rows
 
 
+def _joint_candidate_rows(
+    document: JsonObject,
+    grouped: dict[str, list[JsonObject]],
+    values: list[str],
+    ontology: HpoOntology,
+) -> list[JsonObject]:
+    rows: list[JsonObject] = []
+    for index, value in enumerate(values):
+        rows.append(
+            {
+                "index": index,
+                "value": value,
+                "hpo_name": _hpo_name(ontology, value),
+                "occurrences": [
+                    _occurrence_summary(document, entity)
+                    for entity in grouped[value][:5]
+                ],
+            }
+        )
+    return rows
+
+
 def _prompt(
     document: JsonObject,
     patient: JsonObject,
@@ -222,11 +244,78 @@ in uncertain_indices. An occurrence may support the value even when another occu
 """
 
 
+def _joint_prompt(
+    document: JsonObject,
+    patients: list[JsonObject],
+    rows: list[JsonObject],
+    examples: list[AssociationCalibrationExample],
+) -> str:
+    calibration = [
+        {
+            "label": "ASSOCIATE" if item.accepted else "DO_NOT_ASSOCIATE",
+            "value": item.value,
+            "hpo_name": item.hpo_name,
+            "patient_context": item.patient_context,
+            "occurrence_context": item.occurrence_context,
+        }
+        for item in examples
+    ]
+    patient_rows = [
+        {
+            "patient_id": str(patient["patient_id"]),
+            "summary": _patient_summary(document, patient),
+        }
+        for patient in patients
+    ]
+    return f"""PMC_ID: {document['pmc_id']}
+
+LISTED PATIENTS:
+{json.dumps(patient_rows, ensure_ascii=False, separators=(',', ':'))}
+
+CALIBRATION EXAMPLES FROM OTHER ARTICLES:
+{json.dumps(calibration, ensure_ascii=False, separators=(',', ':'))}
+
+CANDIDATE PHENOTYPE VALUES AND ALL AVAILABLE OCCURRENCES:
+{json.dumps(rows, ensure_ascii=False, separators=(',', ':'))}
+
+Assign each candidate value to every listed patient for whom at least one supplied occurrence is
+explicitly attributable. Patients compete for occurrences: do not copy a value to all patients merely
+because it is a general disease feature. A value may be assigned to multiple patients only when the
+source explicitly supports sharing, such as both twins or all affected siblings. Exclude relatives not
+listed as patients, controls, background, differential diagnoses, and negated findings.
+
+Return exactly:
+{{"assignments":{{"P1":[0,2],"P2":[]}},"uncertain":{{"P1":[5]}}}}
+Use every listed patient ID as a key in assignments. Put borderline indices only in uncertain. Never
+invent a value or index.
+"""
+
+
 def _indices(response: Any, key: str, size: int) -> set[int]:
     if not isinstance(response, dict) or not isinstance(response.get(key), list):
         return set()
     selected: set[int] = set()
     for value in response[key]:
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= index < size:
+            selected.add(index)
+    return selected
+
+
+def _assignment_indices(response: Any, patient_id: str, key: str, size: int) -> set[int]:
+    if not isinstance(response, dict):
+        return set()
+    assignments = response.get(key, {})
+    if not isinstance(assignments, dict):
+        return set()
+    values = assignments.get(patient_id, [])
+    if not isinstance(values, list):
+        return set()
+    selected: set[int] = set()
+    for value in values:
         try:
             index = int(value)
         except (TypeError, ValueError):
@@ -302,6 +391,85 @@ def associate_values_calibrated_with_llm(
             {
                 "patient_id": str(patient["patient_id"]),
                 "phenotype": [value for value in all_values if value in accepted],
+            }
+        )
+    return associations
+
+
+def associate_values_joint_calibrated_with_llm(
+    document: JsonObject,
+    entities: list[JsonObject],
+    ontology: HpoOntology,
+    client: BigModelClient,
+    calibration_examples: list[AssociationCalibrationExample],
+    *,
+    batch_size: int = 25,
+    calibration_per_label: int = 8,
+    include_uncertain: bool = False,
+    exclude_calibration_pmc_id: str | None = None,
+    structure_multi_patient: bool = True,
+    previous_distance: int = 1500,
+    next_distance: int = 300,
+) -> list[JsonObject]:
+    """Assign unique phenotype values jointly while preserving occurrence evidence."""
+    patients = list(document.get("patient", []))
+    patient_ids = [str(patient["patient_id"]) for patient in patients]
+    grouped = _group_entities(entities)
+    all_values = sorted(grouped, key=lambda value: int(grouped[value][0]["offset"]))
+    structural_support: dict[str, set[str]] = defaultdict(set)
+    if structure_multi_patient and len(patients) > 1:
+        for value, occurrences in grouped.items():
+            for entity in occurrences:
+                structural_support[value].update(
+                    _structural_patient_ids(
+                        document,
+                        entity,
+                        previous_distance=previous_distance,
+                        next_distance=next_distance,
+                    )
+                )
+    selected: dict[str, set[str]] = defaultdict(set)
+    for start in range(0, len(all_values), batch_size):
+        values = all_values[start : start + batch_size]
+        rows = _joint_candidate_rows(document, grouped, values, ontology)
+        examples = _select_examples(
+            calibration_examples,
+            set(values),
+            exclude_pmc_id=exclude_calibration_pmc_id,
+            per_label=calibration_per_label,
+        )
+        response = client.chat_json(
+            [
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": _joint_prompt(document, patients, rows, examples),
+                },
+            ],
+            max_tokens=1500,
+        )
+        for patient_id in patient_ids:
+            indices = _assignment_indices(
+                response, patient_id, "assignments", len(values)
+            )
+            if include_uncertain:
+                indices.update(
+                    _assignment_indices(response, patient_id, "uncertain", len(values))
+                )
+            selected[patient_id].update(values[index] for index in indices)
+    associations: list[JsonObject] = []
+    for patient_id in patient_ids:
+        values = selected.get(patient_id, set())
+        if structural_support:
+            values = {
+                value
+                for value in values
+                if patient_id in structural_support.get(value, set())
+            }
+        associations.append(
+            {
+                "patient_id": patient_id,
+                "phenotype": [value for value in all_values if value in values],
             }
         )
     return associations
