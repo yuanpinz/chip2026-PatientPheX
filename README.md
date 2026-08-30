@@ -122,4 +122,15 @@ uv run patientphex-solver discover-entities \
   --output outputs/pred_a_discovered.jsonl
 ```
 
+严格留出验证选出的最终关联融合策略：单患者文章取两个模型结果的并集，多患者文章采用联合模型结果。实体始终来自 `--base` 文件：
+
+```bash
+uv run patientphex-solver fuse-associations \
+  --expected PatientPheX-V1-A/PatientPheX-A.jsonl \
+  --base outputs/pred_a_v7_entity_consensus.jsonl \
+  --primary outputs/pred_a_v8_calibrated_assoc_uncertain.jsonl \
+  --secondary outputs/pred_a_v13_modelh_joint_entities1322.jsonl \
+  --output outputs/pred_a_final_fused.jsonl
+```
+
 所有 API 原始响应都按请求内容 SHA-256 缓存在 `cache/llm/`。该目录已被 `.gitignore` 排除，避免将数据或响应提交到 Git。

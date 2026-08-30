@@ -15,6 +15,7 @@ from patientphex_solver.entity_judge import (
     judge_entities_with_llm,
 )
 from patientphex_solver.evaluation import evaluate
+from patientphex_solver.fusion import fuse_associations_by_patient_count
 from patientphex_solver.io import validate_submission
 from patientphex_solver.llm import parse_json_response
 from patientphex_solver.llm_entities import (
@@ -336,6 +337,55 @@ is_a: HP:0000118 ! root
     )
     assert result == [
         {"patient_id": "P1", "phenotype": ["HP:0001250"]},
+        {"patient_id": "P2", "phenotype": []},
+    ]
+
+
+def test_fusion_unions_single_patient_and_uses_joint_multi_patient() -> None:
+    documents = [
+        {"pmc_id": "single", "patient": [{"patient_id": "P1"}]},
+        {
+            "pmc_id": "multi",
+            "patient": [{"patient_id": "P1"}, {"patient_id": "P2"}],
+        },
+    ]
+    base = [
+        {"pmc_id": "single", "pmid": "1", "entities": [{"text": "a"}]},
+        {"pmc_id": "multi", "pmid": "2", "entities": [{"text": "b"}]},
+    ]
+    primary = [
+        {
+            "pmc_id": "single",
+            "association": [{"patient_id": "P1", "phenotype": ["A"]}],
+        },
+        {
+            "pmc_id": "multi",
+            "association": [
+                {"patient_id": "P1", "phenotype": ["A"]},
+                {"patient_id": "P2", "phenotype": ["B"]},
+            ],
+        },
+    ]
+    secondary = [
+        {
+            "pmc_id": "single",
+            "association": [{"patient_id": "P1", "phenotype": ["B"]}],
+        },
+        {
+            "pmc_id": "multi",
+            "association": [
+                {"patient_id": "P1", "phenotype": ["C"]},
+                {"patient_id": "P2", "phenotype": []},
+            ],
+        },
+    ]
+
+    fused = fuse_associations_by_patient_count(documents, base, primary, secondary)
+    assert fused[0]["association"] == [
+        {"patient_id": "P1", "phenotype": ["A", "B"]}
+    ]
+    assert fused[1]["association"] == [
+        {"patient_id": "P1", "phenotype": ["C"]},
         {"patient_id": "P2", "phenotype": []},
     ]
 

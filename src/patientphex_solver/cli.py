@@ -20,6 +20,7 @@ from .association_judge import (
 from .entities import ExtractorConfig, GazetteerExtractor, merge_entities
 from .entity_judge import build_calibration_examples, judge_entities_with_llm
 from .evaluation import evaluate
+from .fusion import fuse_associations_by_patient_count
 from .io import read_jsonl, validate_submission, write_jsonl
 from .llm import BigModelClient
 from .llm_entities import (
@@ -222,6 +223,21 @@ def _cmd_validate(args: argparse.Namespace) -> None:
         print("\n".join(errors))
         raise SystemExit(1)
     print("VALID")
+
+
+def _cmd_fuse_associations(args: argparse.Namespace) -> None:
+    expected = read_jsonl(args.expected)
+    predictions = fuse_associations_by_patient_count(
+        expected,
+        read_jsonl(args.base),
+        read_jsonl(args.primary),
+        read_jsonl(args.secondary),
+    )
+    errors = validate_submission(predictions, expected)
+    if errors:
+        raise SystemExit("submission validation failed:\n" + "\n".join(errors[:30]))
+    write_jsonl(args.output, predictions)
+    print(f"wrote {args.output} ({len(predictions)} documents)")
 
 
 def _cmd_judge_entities(args: argparse.Namespace) -> None:
@@ -460,6 +476,17 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--expected", required=True)
     validate.add_argument("--predicted", required=True)
     validate.set_defaults(func=_cmd_validate)
+
+    fuse = subparsers.add_parser(
+        "fuse-associations",
+        help="union single-patient predictions and use joint multi-patient predictions",
+    )
+    fuse.add_argument("--expected", required=True)
+    fuse.add_argument("--base", required=True, help="JSONL providing final entities")
+    fuse.add_argument("--primary", required=True, help="primary association JSONL")
+    fuse.add_argument("--secondary", required=True, help="joint association JSONL")
+    fuse.add_argument("--output", required=True)
+    fuse.set_defaults(func=_cmd_fuse_associations)
 
     judge = subparsers.add_parser(
         "judge-entities",
