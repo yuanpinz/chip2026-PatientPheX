@@ -19,11 +19,18 @@ from .association_judge import (
     build_association_calibration_examples,
 )
 from .cnn_fusion import CnnFusionConfig, fuse_cnn_entities
-from .entities import ExtractorConfig, GazetteerExtractor, merge_entities, vote_entities
+from .entities import (
+    ExtractorConfig,
+    GazetteerExtractor,
+    merge_entities,
+    select_entities_by_vote,
+    vote_entities,
+)
 from .entity_judge import build_calibration_examples, judge_entities_with_llm
 from .evaluation import evaluate
 from .fusion import (
     augment_associations_by_vote,
+    clip_associations_to_entities,
     fuse_associations_by_patient_count,
     fuse_associations_by_vote,
 )
@@ -373,6 +380,29 @@ def _cmd_vote_entities(args: argparse.Namespace) -> None:
     )
     write_jsonl(args.output, predictions)
     print(f"wrote {args.output} ({len(predictions)} documents)")
+
+
+def _cmd_select_entities(args: argparse.Namespace) -> None:
+    predictions = select_entities_by_vote(
+        read_jsonl(args.base),
+        [read_jsonl(path) for path in args.sources],
+        min_votes=args.min_votes,
+        max_text_length=args.max_text_length,
+    )
+    write_jsonl(args.output, predictions)
+    total = sum(len(row.get("entities", [])) for row in predictions)
+    print(f"wrote {args.output} ({len(predictions)} documents, {total} entities)")
+
+
+def _cmd_clip_associations(args: argparse.Namespace) -> None:
+    predictions = clip_associations_to_entities(read_jsonl(args.input))
+    write_jsonl(args.output, predictions)
+    total = sum(
+        len(item.get("phenotype", []))
+        for row in predictions
+        for item in row.get("association", [])
+    )
+    print(f"wrote {args.output} ({len(predictions)} documents, {total} associations)")
 
 
 def _cmd_abbreviation_candidates(args: argparse.Namespace) -> None:
@@ -773,6 +803,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     vote_entities_parser.add_argument("--output", required=True)
     vote_entities_parser.set_defaults(func=_cmd_vote_entities)
+
+    select_entities = subparsers.add_parser(
+        "select-entities",
+        help="select entity occurrences supported by multiple source JSONL files",
+    )
+    select_entities.add_argument("--base", required=True, help="rows supplying metadata and associations")
+    select_entities.add_argument("--sources", required=True, nargs="+")
+    select_entities.add_argument("--min-votes", type=int, default=2)
+    select_entities.add_argument("--max-text-length", type=int, default=None)
+    select_entities.add_argument("--output", required=True)
+    select_entities.set_defaults(func=_cmd_select_entities)
+
+    clip = subparsers.add_parser(
+        "clip-associations",
+        help="remove association values not represented by positive entities",
+    )
+    clip.add_argument("--input", required=True)
+    clip.add_argument("--output", required=True)
+    clip.set_defaults(func=_cmd_clip_associations)
 
     abbreviation_candidates = subparsers.add_parser(
         "abbreviation-candidates",

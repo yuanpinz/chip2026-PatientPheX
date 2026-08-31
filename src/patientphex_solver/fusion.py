@@ -21,6 +21,40 @@ def _association_sets(row: JsonObject) -> dict[str, set[str]]:
     }
 
 
+def _entity_values(row: JsonObject) -> set[str]:
+    values: set[str] = set()
+    for entity in row.get("entities", []):
+        if entity.get("note") == "NO":
+            continue
+        identifier = str(entity.get("identifier", ""))
+        if identifier == "-1":
+            values.add(str(entity.get("text", "")))
+        else:
+            values.add(identifier)
+            values.update(identifier.split(";"))
+    return values
+
+
+def clip_associations_to_entities(rows: list[JsonObject]) -> list[JsonObject]:
+    """Keep association values that are represented by positive entity labels."""
+    predictions: list[JsonObject] = []
+    for row in rows:
+        allowed = _entity_values(row)
+        associations = [
+            {
+                "patient_id": item["patient_id"],
+                "phenotype": [
+                    str(value)
+                    for value in item.get("phenotype", [])
+                    if str(value) in allowed
+                ],
+            }
+            for item in row.get("association", [])
+        ]
+        predictions.append({**row, "association": associations})
+    return predictions
+
+
 def fuse_associations_by_patient_count(
     documents: list[JsonObject],
     base_rows: list[JsonObject],

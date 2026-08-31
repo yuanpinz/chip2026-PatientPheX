@@ -446,14 +446,20 @@ def merge_entities(*collections: Iterable[JsonObject]) -> list[JsonObject]:
     )
 
 
-def vote_entities(
+def select_entities_by_vote(
     base_rows: list[JsonObject],
     source_rows: list[list[JsonObject]],
     *,
     min_votes: int = 2,
     max_text_length: int | None = None,
+    keep_base: bool = False,
 ) -> list[JsonObject]:
-    """Merge entity candidates supported by a minimum number of sources."""
+    """Select exact entity occurrences supported by a minimum number of sources.
+
+    The base rows provide document order and metadata.  By default only source
+    occurrences that reach ``min_votes`` are emitted; ``keep_base`` preserves
+    the old additive merge behavior used by :func:`vote_entities`.
+    """
     if not source_rows:
         raise ValueError("at least one entity source is required")
     if min_votes < 1 or min_votes > len(source_rows):
@@ -496,8 +502,29 @@ def vote_entities(
             {
                 "pmc_id": base["pmc_id"],
                 "pmid": base.get("pmid"),
-                "entities": merge_entities(list(base.get("entities", [])), additions),
+                "entities": (
+                    merge_entities(list(base.get("entities", [])), additions)
+                    if keep_base
+                    else merge_entities(additions)
+                ),
                 "association": list(base.get("association", [])),
             }
         )
     return predictions
+
+
+def vote_entities(
+    base_rows: list[JsonObject],
+    source_rows: list[list[JsonObject]],
+    *,
+    min_votes: int = 2,
+    max_text_length: int | None = None,
+) -> list[JsonObject]:
+    """Merge entity candidates supported by a minimum number of sources."""
+    return select_entities_by_vote(
+        base_rows,
+        source_rows,
+        min_votes=min_votes,
+        max_text_length=max_text_length,
+        keep_base=True,
+    )

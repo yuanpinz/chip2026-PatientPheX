@@ -23,6 +23,7 @@ from patientphex_solver.cnn_fusion import (
 from patientphex_solver.entities import (
     GazetteerExtractor,
     merge_entities,
+    select_entities_by_vote,
     vote_entities,
 )
 from patientphex_solver.entity_judge import (
@@ -32,6 +33,7 @@ from patientphex_solver.entity_judge import (
 from patientphex_solver.evaluation import evaluate
 from patientphex_solver.fusion import (
     augment_associations_by_vote,
+    clip_associations_to_entities,
     fuse_associations_by_patient_count,
     fuse_associations_by_vote,
 )
@@ -603,6 +605,54 @@ def test_fusion_unions_single_patient_and_uses_joint_multi_patient() -> None:
     assert fused[1]["association"] == [
         {"patient_id": "P1", "phenotype": ["C"]},
         {"patient_id": "P2", "phenotype": []},
+    ]
+
+
+def test_select_entities_by_vote_can_replace_base_with_exact_intersection() -> None:
+    base = [
+        {
+            "pmc_id": "doc",
+            "pmid": "1",
+            "entities": [{"offset": 1, "length": 1, "identifier": "HP:BASE"}],
+            "association": [{"patient_id": "P1", "phenotype": ["HP:A", "HP:BASE"]}],
+        }
+    ]
+    source_a = [
+        {"pmc_id": "doc", "entities": [
+            {"offset": 10, "length": 3, "identifier": "HP:A", "text": "one", "note": None},
+            {"offset": 20, "length": 3, "identifier": "HP:B", "text": "two", "note": None},
+            {"offset": 20, "length": 3, "identifier": "HP:B", "text": "two", "note": None},
+        ]}
+    ]
+    source_b = [
+        {"pmc_id": "doc", "entities": [
+            {"offset": 10, "length": 3, "identifier": "HP:A", "text": "one", "note": None},
+            {"offset": 30, "length": 3, "identifier": "HP:C", "text": "tri", "note": None},
+        ]}
+    ]
+
+    selected = select_entities_by_vote(base, [source_a, source_b], min_votes=2)
+    assert [(item["offset"], item["identifier"]) for item in selected[0]["entities"]] == [(10, "HP:A")]
+    assert selected[0]["association"] == base[0]["association"]
+
+
+def test_clip_associations_to_entities_supports_compound_ids_and_unmapped_text() -> None:
+    rows = [
+        {
+            "pmc_id": "doc",
+            "entities": [
+                {"identifier": "HP:A;HP:B", "text": "finding", "note": None},
+                {"identifier": "-1", "text": "unmapped finding", "note": None},
+                {"identifier": "HP:NO", "text": "negative", "note": "NO"},
+            ],
+            "association": [
+                {"patient_id": "P1", "phenotype": ["HP:A", "HP:B", "HP:NO", "unmapped finding", "missing"]}
+            ],
+        }
+    ]
+    clipped = clip_associations_to_entities(rows)
+    assert clipped[0]["association"] == [
+        {"patient_id": "P1", "phenotype": ["HP:A", "HP:B", "unmapped finding"]}
     ]
 
 
