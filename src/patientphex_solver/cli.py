@@ -21,7 +21,7 @@ from .cnn_fusion import CnnFusionConfig, fuse_cnn_entities
 from .entities import ExtractorConfig, GazetteerExtractor, merge_entities
 from .entity_judge import build_calibration_examples, judge_entities_with_llm
 from .evaluation import evaluate
-from .fusion import fuse_associations_by_patient_count
+from .fusion import fuse_associations_by_patient_count, fuse_associations_by_vote
 from .io import read_jsonl, validate_submission, write_jsonl
 from .llm import BigModelClient
 from .llm_entities import (
@@ -236,6 +236,37 @@ def _cmd_fuse_associations(args: argparse.Namespace) -> None:
         union_multi=args.union_multi,
         structure_previous_distance=args.structure_previous_distance,
         structure_next_distance=args.structure_next_distance,
+    )
+    errors = validate_submission(predictions, expected)
+    if errors:
+        raise SystemExit("submission validation failed:\n" + "\n".join(errors[:30]))
+    write_jsonl(args.output, predictions)
+    print(f"wrote {args.output} ({len(predictions)} documents)")
+
+
+def _cmd_vote_associations(args: argparse.Namespace) -> None:
+    expected = read_jsonl(args.expected)
+    predictions = fuse_associations_by_vote(
+        expected,
+        read_jsonl(args.base),
+        [read_jsonl(path) for path in args.sources],
+        min_votes=args.min_votes,
+        single_patient_source_indices=(
+            [index - 1 for index in args.single_patient_source_indices]
+            if args.single_patient_source_indices
+            else None
+        ),
+        single_patient_min_votes=args.single_patient_min_votes,
+        structure_previous_distance=args.structure_previous_distance,
+        structure_next_distance=args.structure_next_distance,
+        structure_wide_sections=(
+            {value.upper() for value in args.structure_wide_sections}
+            if args.structure_wide_sections
+            else None
+        ),
+        structure_wide_previous_distance=args.structure_wide_previous_distance,
+        structure_wide_next_distance=args.structure_wide_next_distance,
+        propagate_explicit_groups=args.propagate_explicit_groups,
     )
     errors = validate_submission(predictions, expected)
     if errors:
@@ -566,6 +597,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="optional local structure filter distance after an entity (characters)",
     )
     fuse.set_defaults(func=_cmd_fuse_associations)
+
+    vote = subparsers.add_parser(
+        "vote-associations",
+        help="retain patient associations supported by multiple model outputs",
+    )
+    vote.add_argument("--expected", required=True)
+    vote.add_argument("--base", required=True, help="JSONL providing final entities")
+    vote.add_argument(
+        "--sources",
+        nargs="+",
+        required=True,
+        help="two or more association JSONL files",
+    )
+    vote.add_argument("--min-votes", type=int, default=2)
+    vote.add_argument(
+        "--single-patient-source-indices",
+        nargs="+",
+        type=int,
+        default=None,
+        help="optional 1-based source subset used only for single-patient articles",
+    )
+    vote.add_argument("--single-patient-min-votes", type=int, default=None)
+    vote.add_argument("--structure-previous-distance", type=int, default=None)
+    vote.add_argument("--structure-next-distance", type=int, default=None)
+    vote.add_argument("--structure-wide-sections", nargs="+", default=None)
+    vote.add_argument("--structure-wide-previous-distance", type=int, default=None)
+    vote.add_argument("--structure-wide-next-distance", type=int, default=None)
+    vote.add_argument("--propagate-explicit-groups", action="store_true")
+    vote.add_argument("--output", required=True)
+    vote.set_defaults(func=_cmd_vote_associations)
 
     fuse_cnn = subparsers.add_parser(
         "fuse-cnn-entities",

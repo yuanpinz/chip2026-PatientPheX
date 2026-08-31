@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from patientphex_solver.association import (
     _filter_selected_indices_by_structure,
     filter_associations_by_structure,
+    propagate_explicit_group_associations,
 )
 from patientphex_solver.association_judge import (
     associate_values_calibrated_with_llm,
@@ -20,7 +25,10 @@ from patientphex_solver.entity_judge import (
     judge_entities_with_llm,
 )
 from patientphex_solver.evaluation import evaluate
-from patientphex_solver.fusion import fuse_associations_by_patient_count
+from patientphex_solver.fusion import (
+    fuse_associations_by_patient_count,
+    fuse_associations_by_vote,
+)
 from patientphex_solver.io import validate_submission
 from patientphex_solver.llm import parse_json_response
 from patientphex_solver.llm_entities import (
@@ -434,6 +442,50 @@ is_a: HP:0000118 ! root
     ]
 
 
+def test_joint_calibrated_association_skips_malformed_batch(tmp_path) -> None:
+    obo = tmp_path / "small.obo"
+    obo.write_text(
+        """format-version: 1.2
+
+[Term]
+id: HP:0000118
+name: Phenotypic abnormality
+
+[Term]
+id: HP:0001250
+name: Seizure
+is_a: HP:0000118 ! root
+""",
+        encoding="utf-8",
+    )
+    ontology = HpoOntology.from_obo(obo)
+    document = {
+        "pmc_id": "malformed",
+        "patient": [{"patient_id": "P1"}],
+    }
+    entity = {
+        "identifier": "HP:0001250",
+        "type": "Phenotype",
+        "offset": 0,
+        "length": 7,
+        "text": "seizure",
+        "note": None,
+    }
+
+    class FakeClient:
+        def chat_json(self, messages, *, max_tokens=8000):
+            raise json.JSONDecodeError("bad response", "not json", 0)
+
+    assert associate_values_joint_calibrated_with_llm(
+        document,
+        [entity],
+        ontology,
+        FakeClient(),
+        [],
+        structure_multi_patient=False,
+    ) == [{"patient_id": "P1", "phenotype": []}]
+
+
 def test_fusion_unions_single_patient_and_uses_joint_multi_patient() -> None:
     documents = [
         {"pmc_id": "single", "patient": [{"patient_id": "P1"}]},
@@ -498,6 +550,275 @@ def test_fusion_can_union_multi_patient_sources() -> None:
         {"patient_id": "P1", "phenotype": ["A", "B"]},
         {"patient_id": "P2", "phenotype": ["C"]},
     ]
+
+
+def test_fusion_votes_across_sources() -> None:
+    document = {
+        "pmc_id": "multi",
+        "patient": [{"patient_id": "P1"}],
+    }
+    base = [{"pmc_id": "multi", "pmid": "1", "entities": []}]
+    sources = [
+        [{"pmc_id": "multi", "association": [{"patient_id": "P1", "phenotype": ["A", "B"]}]}],
+        [{"pmc_id": "multi", "association": [{"patient_id": "P1", "phenotype": ["A", "C"]}]}],
+        [{"pmc_id": "multi", "association": [{"patient_id": "P1", "phenotype": ["A"]}]}],
+    ]
+    fused = fuse_associations_by_vote(
+        [document], base, sources, min_votes=2
+    )
+    assert fused[0]["association"] == [
+        {"patient_id": "P1", "phenotype": ["A"]}
+    ]
+
+
+def test_fusion_uses_single_patient_source_subset_only_for_singletons() -> None:
+    documents = [
+        {"pmc_id": "single", "patient": [{"patient_id": "P1"}]},
+        {
+            "pmc_id": "multi",
+            "patient": [{"patient_id": "P1"}, {"patient_id": "P2"}],
+        },
+    ]
+    base = [
+        {"pmc_id": "single", "pmid": "1", "entities": []},
+        {"pmc_id": "multi", "pmid": "2", "entities": []},
+    ]
+    sources = [
+        [
+            {"pmc_id": "single", "association": [{"patient_id": "P1", "phenotype": ["A"]}]},
+            {"pmc_id": "multi", "association": [{"patient_id": "P1", "phenotype": ["M"]}, {"patient_id": "P2", "phenotype": []}]},
+        ],
+        [
+            {"pmc_id": "single", "association": [{"patient_id": "P1", "phenotype": ["A"]}]},
+            {"pmc_id": "multi", "association": [{"patient_id": "P1", "phenotype": []}, {"patient_id": "P2", "phenotype": ["N"]}]},
+        ],
+        [
+            {"pmc_id": "single", "association": [{"patient_id": "P1", "phenotype": ["B"]}]},
+            {"pmc_id": "multi", "association": [{"patient_id": "P1", "phenotype": ["M"]}, {"patient_id": "P2", "phenotype": []}]},
+        ],
+        [
+            {"pmc_id": "single", "association": [{"patient_id": "P1", "phenotype": ["C"]}]},
+            {"pmc_id": "multi", "association": [{"patient_id": "P1", "phenotype": []}, {"patient_id": "P2", "phenotype": ["N"]}]},
+        ],
+    ]
+
+    fused = fuse_associations_by_vote(
+        documents,
+        base,
+        sources,
+        min_votes=2,
+        single_patient_source_indices=[0, 1, 3],
+        single_patient_min_votes=2,
+    )
+
+    assert fused[0]["association"] == [
+        {"patient_id": "P1", "phenotype": ["A"]}
+    ]
+    assert fused[1]["association"] == [
+        {"patient_id": "P1", "phenotype": ["M"]},
+        {"patient_id": "P2", "phenotype": ["N"]},
+    ]
+
+
+def test_fusion_rejects_invalid_single_patient_source_indices() -> None:
+    document = {"pmc_id": "single", "patient": [{"patient_id": "P1"}]}
+    base = [{"pmc_id": "single", "pmid": "1", "entities": []}]
+    source = [{"pmc_id": "single", "association": [{"patient_id": "P1", "phenotype": []}]}]
+
+    with pytest.raises(ValueError, match="out of range"):
+        fuse_associations_by_vote(
+            [document],
+            base,
+            [source],
+            min_votes=1,
+            single_patient_source_indices=[1],
+        )
+    with pytest.raises(ValueError, match="unique"):
+        fuse_associations_by_vote(
+            [document], base, [source, source], single_patient_source_indices=[0, 0]
+        )
+    with pytest.raises(ValueError, match="single-patient min votes"):
+        fuse_associations_by_vote(
+            [document],
+            base,
+            [source],
+            min_votes=1,
+            single_patient_source_indices=[0],
+            single_patient_min_votes=0,
+        )
+
+
+def test_explicit_group_propagation_handles_both_listed_patients() -> None:
+    text = "Both P1 and P2 had seizures."
+    document = {
+        "pmc_id": "group",
+        "patient": [
+            {"patient_id": "P1", "mention": [{"text": "P1", "offset": 5, "length": 2}]},
+            {"patient_id": "P2", "mention": [{"text": "P2", "offset": 12, "length": 2}]},
+        ],
+        "full_text": [{"section_type": "CASE", "offset": 0, "text": text}],
+    }
+    entity = {
+        "identifier": "HP:0001250",
+        "offset": text.index("seizures"),
+        "length": len("seizures"),
+        "text": "seizures",
+        "note": None,
+    }
+    associations = [
+        {"patient_id": "P1", "phenotype": ["HP:0001250"]},
+        {"patient_id": "P2", "phenotype": []},
+    ]
+
+    assert propagate_explicit_group_associations(
+        document, [entity], associations
+    ) == [
+        {"patient_id": "P1", "phenotype": ["HP:0001250"]},
+        {"patient_id": "P2", "phenotype": ["HP:0001250"]},
+    ]
+
+
+def test_explicit_group_propagation_does_not_copy_patient_specific_tail() -> None:
+    text = "Both P1 and P2 had seizures, and P1 additionally has epilepsy."
+    document = {
+        "pmc_id": "tail",
+        "patient": [
+            {"patient_id": "P1", "mention": [{"text": "P1", "offset": 5, "length": 2}]},
+            {"patient_id": "P2", "mention": [{"text": "P2", "offset": 12, "length": 2}]},
+        ],
+        "full_text": [{"section_type": "CASE", "offset": 0, "text": text}],
+    }
+    entity = {
+        "identifier": "HP:0001250",
+        "offset": text.index("epilepsy"),
+        "length": len("epilepsy"),
+        "text": "epilepsy",
+        "note": None,
+    }
+    associations = [
+        {"patient_id": "P1", "phenotype": []},
+        {"patient_id": "P2", "phenotype": []},
+    ]
+
+    assert propagate_explicit_group_associations(
+        document, [entity], associations
+    ) == [
+        {"patient_id": "P1", "phenotype": ["HP:0001250"]},
+        {"patient_id": "P2", "phenotype": []},
+    ]
+
+
+def test_explicit_group_propagation_ignores_negated_shared_finding() -> None:
+    text = "Both P1 and P2 had no seizures."
+    document = {
+        "pmc_id": "negated-group",
+        "patient": [
+            {"patient_id": "P1", "mention": [{"text": "P1", "offset": 5, "length": 2}]},
+            {"patient_id": "P2", "mention": [{"text": "P2", "offset": 12, "length": 2}]},
+        ],
+        "full_text": [{"section_type": "CASE", "offset": 0, "text": text}],
+    }
+    entity = {
+        "identifier": "HP:0001250",
+        "offset": text.index("seizures"),
+        "length": len("seizures"),
+        "text": "seizures",
+        "note": None,
+    }
+    associations = [
+        {"patient_id": "P1", "phenotype": ["HP:0001250"]},
+        {"patient_id": "P2", "phenotype": []},
+    ]
+
+    assert propagate_explicit_group_associations(
+        document, [entity], associations
+    ) == associations
+
+
+def test_explicit_group_propagation_uses_previous_patient_enumeration() -> None:
+    text = "P1 and P2 were examined. All had seizures."
+    document = {
+        "pmc_id": "enumerated-group",
+        "patient": [
+            {"patient_id": "P1", "mention": [{"text": "P1", "offset": 0, "length": 2}]},
+            {"patient_id": "P2", "mention": [{"text": "P2", "offset": 7, "length": 2}]},
+        ],
+        "full_text": [{"section_type": "CASE", "offset": 0, "text": text}],
+    }
+    entity = {
+        "identifier": "HP:0001250",
+        "offset": text.index("seizures"),
+        "length": len("seizures"),
+        "text": "seizures",
+        "note": None,
+    }
+    associations = [
+        {"patient_id": "P1", "phenotype": []},
+        {"patient_id": "P2", "phenotype": []},
+    ]
+
+    assert propagate_explicit_group_associations(
+        document, [entity], associations
+    ) == [
+        {"patient_id": "P1", "phenotype": ["HP:0001250"]},
+        {"patient_id": "P2", "phenotype": ["HP:0001250"]},
+    ]
+
+
+def test_structure_filter_widens_only_selected_sections() -> None:
+    document = {
+        "pmc_id": "wide",
+        "patient": [
+            {"patient_id": "P1", "mention": [{"offset": 0, "length": 2}]},
+            {"patient_id": "P2", "mention": [{"offset": 3000, "length": 2}]},
+        ],
+        "full_text": [
+            {"section_type": "CASE", "offset": 0, "text": "P1"},
+            {"section_type": "CASE", "offset": 1000, "text": "Seizures were observed."},
+            {"section_type": "CASE", "offset": 3000, "text": "P2"},
+        ],
+    }
+    entity = {
+        "identifier": "HP:0001250",
+        "offset": 1000,
+        "length": 8,
+        "text": "Seizures",
+        "note": None,
+    }
+    associations = [
+        {"patient_id": "P1", "phenotype": ["HP:0001250"]},
+        {"patient_id": "P2", "phenotype": []},
+    ]
+
+    assert filter_associations_by_structure(
+        document, [entity], associations, previous_distance=800, next_distance=200
+    ) == [
+        {"patient_id": "P1", "phenotype": []},
+        {"patient_id": "P2", "phenotype": []},
+    ]
+    assert filter_associations_by_structure(
+        document,
+        [entity],
+        associations,
+        previous_distance=800,
+        next_distance=200,
+        wide_sections={"RESULTS"},
+        wide_previous_distance=5000,
+        wide_next_distance=200,
+    ) == [
+        {"patient_id": "P1", "phenotype": []},
+        {"patient_id": "P2", "phenotype": []},
+    ]
+    assert filter_associations_by_structure(
+        document,
+        [entity],
+        associations,
+        previous_distance=800,
+        next_distance=200,
+        wide_sections={"CASE"},
+        wide_previous_distance=5000,
+        wide_next_distance=200,
+    ) == associations
 
 
 def test_hpo_alias_and_alt_id_resolution(tmp_path) -> None:

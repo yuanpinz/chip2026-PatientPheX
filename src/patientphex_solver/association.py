@@ -25,6 +25,11 @@ def _entity_value(entity: JsonObject) -> str:
     return str(entity["text"]) if identifier == "-1" else identifier
 
 
+def _entity_values(entity: JsonObject) -> list[str]:
+    value = _entity_value(entity)
+    return [value] if str(entity["identifier"]) == "-1" else value.split(";")
+
+
 def _passage_index(document: JsonObject, entity: JsonObject) -> int | None:
     located = passage_for_offset(document, int(entity["offset"]))
     return located[0] if located else None
@@ -439,8 +444,15 @@ def filter_associations_by_structure(
     *,
     previous_distance: int = 3000,
     next_distance: int = 300,
+    wide_sections: set[str] | None = None,
+    wide_previous_distance: int | None = None,
+    wide_next_distance: int | None = None,
 ) -> list[JsonObject]:
-    """Remove multi-patient assignments unsupported by local article structure."""
+    """Remove multi-patient assignments unsupported by local article structure.
+
+    ``wide_sections`` can retain longer case narratives without relaxing the
+    filter for introductions and other background-heavy sections.
+    """
     patients = document.get("patient", [])
     if len(patients) <= 1:
         return associations
@@ -449,15 +461,27 @@ def filter_associations_by_structure(
     for entity in entities:
         if entity.get("note") == "NO":
             continue
-        value = _entity_value(entity)
-        value_patients[value].update(
-            _structural_patient_ids(
-                document,
-                entity,
-                previous_distance=previous_distance,
-                next_distance=next_distance,
-            )
+        located = passage_for_offset(document, int(entity["offset"]))
+        section = (
+            str(located[1].get("section_type", "")).upper() if located else ""
         )
+        use_wide_window = bool(wide_sections and section in wide_sections)
+        supported = _structural_patient_ids(
+            document,
+            entity,
+            previous_distance=(
+                wide_previous_distance
+                if use_wide_window and wide_previous_distance is not None
+                else previous_distance
+            ),
+            next_distance=(
+                wide_next_distance
+                if use_wide_window and wide_next_distance is not None
+                else next_distance
+            ),
+        )
+        for value in _entity_values(entity):
+            value_patients[value].update(supported)
 
     filtered: list[JsonObject] = []
     for association in associations:
@@ -469,6 +493,182 @@ def filter_associations_by_structure(
         ]
         filtered.append({**association, "phenotype": phenotype})
     return filtered
+
+
+_GROUP_CUE_RE = re.compile(
+    r"\b(?:all|both|patients?|individuals?|siblings?|sibs?)\b", re.IGNORECASE
+)
+_ALL_LISTED_PATIENTS_RE = re.compile(
+    r"\b(?:both\s+(?:of\s+)?(?:our\s+)?patients|"
+    r"one\s+patient\b[^.!?;]{0,100}\bthe\s+other|"
+    r"both\s+associated\s+with\b|"
+    r"one\s+patient\b[^.!?;]{0,100}\b(?:suspected|confirmed)\s+in\s+the\s+other)\b",
+    re.IGNORECASE,
+)
+_GROUP_PRONOUN_RE = re.compile(r"^\s*(?:all|both|they|their)\b", re.IGNORECASE)
+_NEGATED_FINDING_RE = re.compile(
+    r"\b(?:no|not|without|lack(?:ing|s|ed)?(?:\s+of)?|absent|neither)\b",
+    re.IGNORECASE,
+)
+
+
+def _patient_aliases(document: JsonObject) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    generic_mentions = {
+        "case",
+        "individual",
+        "man",
+        "patient",
+        "person",
+        "proband",
+        "subject",
+        "woman",
+    }
+    for patient in document.get("patient", []):
+        patient_id = str(patient["patient_id"])
+        candidates = {patient_id}
+        if patient_id.startswith("O") and len(patient_id) > 1:
+            candidates.add(patient_id[1:])
+        for mention in patient.get("mention", []):
+            text = " ".join(str(mention.get("text", "")).split())
+            if len(text) >= 2 and text.lower() not in generic_mentions:
+                candidates.add(text)
+        for candidate in candidates:
+            aliases.setdefault(candidate.casefold(), patient_id)
+    return aliases
+
+
+def _patients_named_in_text(text: str, aliases: dict[str, str]) -> list[str]:
+    named: list[str] = []
+    for alias, patient_id in sorted(
+        aliases.items(), key=lambda item: len(item[0]), reverse=True
+    ):
+        pattern = rf"(?<![A-Za-z0-9]){re.escape(alias)}(?![A-Za-z0-9])"
+        if re.search(pattern, text, re.IGNORECASE) and patient_id not in named:
+            named.append(patient_id)
+    return named
+
+
+def _explicit_group_patients(
+    sentence: str,
+    previous_sentence: str,
+    patient_ids: list[str],
+    aliases: dict[str, str],
+    *,
+    section: str,
+) -> set[str]:
+    named = _patients_named_in_text(sentence, aliases)
+    if len(named) >= 2 and _GROUP_CUE_RE.search(sentence):
+        return set(named)
+    if len(patient_ids) == 2 and _ALL_LISTED_PATIENTS_RE.search(sentence):
+        return set(patient_ids)
+    if (
+        len(patient_ids) == 2
+        and section == "ABSTRACT"
+        and re.search(r"\bboth\b", sentence, re.IGNORECASE)
+        and re.search(r"\b(?:presented|characterized|features?)\b", sentence, re.IGNORECASE)
+    ):
+        return set(patient_ids)
+    if _GROUP_PRONOUN_RE.search(sentence):
+        previous_named = _patients_named_in_text(previous_sentence, aliases)
+        if len(previous_named) >= 2:
+            return set(previous_named)
+    return set()
+
+
+def _finding_is_negated(sentence: str, local_start: int) -> bool:
+    preceding = sentence[max(0, local_start - 80) : local_start]
+    return bool(_NEGATED_FINDING_RE.search(preceding))
+
+
+def propagate_explicit_group_associations(
+    document: JsonObject,
+    entities: list[JsonObject],
+    associations: list[JsonObject],
+) -> list[JsonObject]:
+    """Add findings stated for an explicit group of listed patients.
+
+    The rule is deliberately sentence-local. It resolves enumerated patient
+    IDs, exact two-patient wording, and an immediately preceding enumeration;
+    generic cohort language is ignored.
+    """
+    patient_ids = [str(patient["patient_id"]) for patient in document.get("patient", [])]
+    if len(patient_ids) <= 1:
+        return associations
+    aliases = _patient_aliases(document)
+    additions: dict[str, set[str]] = defaultdict(set)
+    value_order: list[str] = []
+
+    for entity in entities:
+        if entity.get("note") == "NO":
+            continue
+        for value in _entity_values(entity):
+            if value not in value_order:
+                value_order.append(value)
+        located = passage_for_offset(document, int(entity["offset"]))
+        if located is None:
+            continue
+        _, passage = located
+        passage_text = str(passage.get("text", ""))
+        passage_offset = int(passage["offset"])
+        local_start = int(entity["offset"]) - passage_offset
+        local_end = local_start + int(entity["length"])
+        sentence_start, sentence_end = _sentence_bounds(
+            passage_text, local_start, local_end
+        )
+        sentence = passage_text[sentence_start:sentence_end]
+        before_sentence = passage_text[: max(0, sentence_start - 1)]
+        previous_start = (
+            max(before_sentence.rfind(mark) for mark in ".!?;\n") + 1
+        )
+        previous_sentence = passage_text[previous_start:sentence_start]
+        group = _explicit_group_patients(
+            sentence,
+            previous_sentence,
+            patient_ids,
+            aliases,
+            section=str(passage.get("section_type", "")).upper(),
+        )
+        if not group or _finding_is_negated(sentence, local_start - sentence_start):
+            continue
+
+        prefix = sentence[: local_start - sentence_start]
+        for alias, patient_id in aliases.items():
+            specific = re.search(
+                rf"(?<![A-Za-z0-9]){re.escape(alias)}(?![A-Za-z0-9])"
+                r"[^.!?;]{0,35}\b(?:additionally|only|alone)\b",
+                prefix,
+                re.IGNORECASE,
+            )
+            if specific:
+                group = {patient_id}
+                break
+
+        suffix = sentence[local_end - sentence_start :]
+        excluded_match = re.search(
+            r"\ball\s+but\s+(?:individual|patient)?\s*([A-Za-z0-9:.-]+)",
+            suffix[:100],
+            re.IGNORECASE,
+        )
+        if excluded_match:
+            group.difference_update(
+                _patients_named_in_text(excluded_match.group(0), aliases)
+            )
+
+        for patient_id in group:
+            additions[patient_id].update(_entity_values(entity))
+
+    propagated: list[JsonObject] = []
+    for association in associations:
+        patient_id = str(association.get("patient_id"))
+        values = list(association.get("phenotype", []))
+        seen = set(values)
+        for value in value_order:
+            if value in additions.get(patient_id, set()) and value not in seen:
+                values.append(value)
+                seen.add(value)
+        propagated.append({**association, "phenotype": values})
+    return propagated
 
 
 def _filter_selected_indices_by_structure(

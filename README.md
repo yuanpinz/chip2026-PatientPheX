@@ -1,6 +1,6 @@
 # PatientPheX solver
 
-这是 CHIP2026 PatientPheX 的可复现混合系统。项目使用 `uv` 管理 Python 3.12 环境和锁文件，预测结果输出为赛题要求的 UTF-8 JSONL。
+这是 CHIP2026 PatientPheX 的可复现混合系统。项目使用 `uv` 管理 Python 3.12 环境和锁文件，预测结果输出为赛题要求的 UTF-8 JSONL。模型推理全部通过赛题提供的 API 完成，本地不需要 GPU。
 
 ## 组成
 
@@ -136,9 +136,24 @@ uv run patientphex-solver merge-entities \
   --output outputs/pred_a_cnn_judged_entities.jsonl
 ```
 
-在新增实体上分别运行 `modelS5_6S` 和 `modelH` 的联合患者关联后，可用既有的患者数量融合规则生成结果：
+在新增实体上运行多个联合患者关联模型后，可用投票融合规则生成结果。下面的五路组合和局部结构参数由两组互不重叠的严格留出文章验证选择：
 
 ```bash
+uv run patientphex-solver judge-associations \
+  --split a --candidates outputs/pred_a_cnn_judged_entities.jsonl \
+  --joint --model modelH \
+  --output outputs/pred_a_cnn_modelh_joint_strict.jsonl
+
+uv run patientphex-solver judge-associations \
+  --split a --candidates outputs/pred_a_cnn_judged_entities.jsonl \
+  --joint --include-uncertain --model modelH \
+  --output outputs/pred_a_cnn_modelh_joint.jsonl
+
+uv run patientphex-solver judge-associations \
+  --split a --candidates outputs/pred_a_cnn_judged_entities.jsonl \
+  --joint --model modelS5_6S \
+  --output outputs/pred_a_cnn_s56_joint_strict.jsonl
+
 uv run patientphex-solver judge-associations \
   --split a --candidates outputs/pred_a_cnn_judged_entities.jsonl \
   --joint --include-uncertain --model modelS5_6S \
@@ -146,19 +161,35 @@ uv run patientphex-solver judge-associations \
 
 uv run patientphex-solver judge-associations \
   --split a --candidates outputs/pred_a_cnn_judged_entities.jsonl \
-  --joint --model modelH \
-  --output outputs/pred_a_cnn_modelh_joint_strict.jsonl
+  --joint --include-uncertain --model modelK1-instruct-2507 \
+  --output outputs/pred_a_cnn_k1_joint.jsonl
 
-uv run patientphex-solver fuse-associations \
+uv run patientphex-solver vote-associations \
   --expected PatientPheX-V1-A/PatientPheX-A.jsonl \
   --base outputs/pred_a_cnn_judged_entities.jsonl \
-  --primary outputs/pred_a_cnn_s56_joint.jsonl \
-  --secondary outputs/pred_a_cnn_modelh_joint_strict.jsonl \
-  --union-multi \
+  --sources \
+    outputs/pred_a_cnn_modelh_joint_strict.jsonl \
+    outputs/pred_a_cnn_modelh_joint.jsonl \
+    outputs/pred_a_cnn_s56_joint_strict.jsonl \
+    outputs/pred_a_cnn_s56_joint.jsonl \
+    outputs/pred_a_cnn_k1_joint.jsonl \
+  --min-votes 2 \
+  --single-patient-source-indices 1 2 3 5 \
+  --single-patient-min-votes 2 \
   --structure-previous-distance 800 \
   --structure-next-distance 200 \
-  --output outputs/pred_a_cnn_final_fused.jsonl
+  --structure-wide-sections CASE RESULTS FIG TABLE \
+  --structure-wide-previous-distance 5000 \
+  --structure-wide-next-distance 200 \
+  --propagate-explicit-groups \
+  --output outputs/pred_a_cnn_final_v2.jsonl
+
+uv run patientphex-solver validate \
+  --expected PatientPheX-V1-A/PatientPheX-A.jsonl \
+  --predicted outputs/pred_a_cnn_final_v2.jsonl
 ```
+
+最终策略在两组互不重叠的 10 篇留出文章上分别得到 `0.719385` 和 `0.742198`，合并 20 篇评分为 `0.735699`；旧五源融合对应成绩为 `0.716220`、`0.732178` 和 `0.727640`。留出结果仅用于本地模型选择，最终榜单成绩仍以提交平台返回值为准。
 
 也可以用 held-out 训练文章作为 few-shot 示例，让 API 发现词典遗漏的候选实体。模型只负责提出原文 span，HPO ID 仍由本地本体链接器校验：
 

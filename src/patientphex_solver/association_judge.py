@@ -438,16 +438,20 @@ def associate_values_joint_calibrated_with_llm(
             exclude_pmc_id=exclude_calibration_pmc_id,
             per_label=calibration_per_label,
         )
-        response = client.chat_json(
-            [
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": _joint_prompt(document, patients, rows, examples),
-                },
-            ],
-            max_tokens=1500,
-        )
+        try:
+            response = client.chat_json(
+                [
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": _joint_prompt(document, patients, rows, examples),
+                    },
+                ],
+                max_tokens=1500,
+            )
+        except (json.JSONDecodeError, RuntimeError):
+            # One malformed or failed batch must not discard earlier batches.
+            continue
         for patient_id in patient_ids:
             indices = _assignment_indices(
                 response, patient_id, "assignments", len(values)
