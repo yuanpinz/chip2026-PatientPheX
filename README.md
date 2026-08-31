@@ -400,10 +400,15 @@ uv run patientphex-solver validate \
 留出结果只用于选择融合规则，是否超过榜首仍以天池平台实际评分为准。
 
 当前推荐的 API-only 路线在 v7 的基础上取两个独立 API 实体结果的完整 occurrence
-交集，再用 `modelH` 对所有患者做联合关联。关联阶段把 v7 关联和 `modelH` 关联并集，
-然后删除没有对应正实体的关联值；这一步同时支持复合 HPO ID 与 `-1` 未映射文本。
-该路线不需要 GPU。两组严格留出分别得到 `0.839225` 和 `0.861317`，合并 20 篇为
-`0.854794`；A 集结果包含 20 篇文章、1284 个实体和 416 个关联值：
+交集，再用 `modelH` 对所有患者做联合关联。关联阶段针对患者数量使用条件融合：患者数为
+`2–7` 时取 v7 关联和 `modelH` 关联的并集，患者数为 `1` 或大于 `7` 时只使用
+`modelH` 关联；最后删除没有对应正实体的关联值。这一步同时支持复合 HPO ID 与 `-1`
+未映射文本，且不需要 GPU。
+
+相较于对所有文章直接并集的旧策略（两组严格留出分别为 `0.839225` 和 `0.861317`，
+合并 20 篇为 `0.854794`），条件策略分别得到 `0.843558` 和 `0.863813`，合并 20 篇为
+`0.857876`。合并关联评估为 micro F1 `0.833474`、macro F1 `0.808896`，TP/FP/FN
+为 `493/107/90`。A 集结果包含 20 篇文章、1284 个实体和 401 个关联值：
 
 ```bash
 uv run patientphex-solver select-entities \
@@ -425,21 +430,21 @@ uv run patientphex-solver fuse-associations \
   --base outputs/pred_a_api_entity_intersection_v7.jsonl \
   --primary outputs/pred_a_api_entity_intersection_v7.jsonl \
   --secondary outputs/pred_a_api_intersection_modelh_joint.jsonl \
-  --union-multi \
-  --output outputs/pred_a_api_intersection_v7_unionh.jsonl
+  --union-patient-count-range 2 7 \
+  --output outputs/pred_a_api_intersection_v7_h_conditional.jsonl
 
 uv run patientphex-solver clip-associations \
-  --input outputs/pred_a_api_intersection_v7_unionh.jsonl \
-  --output outputs/pred_a_api_intersection_v7_unionh_clipped.jsonl
+  --input outputs/pred_a_api_intersection_v7_h_conditional.jsonl \
+  --output outputs/pred_a_api_intersection_v7_h_conditional_clipped.jsonl
 
 uv run patientphex-solver validate \
   --expected PatientPheX-V1-A/PatientPheX-A.jsonl \
-  --predicted outputs/pred_a_api_intersection_v7_unionh_clipped.jsonl
+  --predicted outputs/pred_a_api_intersection_v7_h_conditional_clipped.jsonl
 ```
 
-推荐提交文件 `outputs/pred_a_api_intersection_v7_unionh_clipped.jsonl` 的 SHA-256 为
-`b954de454f4497848283c40097970bfdd1bc4931f9756e20e0f053ae3c6862c1`。留出分数用于本地
-选择策略，最终排名仍以天池实际提交结果为准。
+推荐提交文件 `outputs/pred_a_api_intersection_v7_h_conditional_clipped.jsonl` 的
+SHA-256 为 `dca6bcfa984701225542f338686f7e1a117e7fbc23e5d2924155e8b27862b328`。
+留出分数用于本地选择策略，最终排名仍以天池实际提交结果为准。
 
 也可以用 held-out 训练文章作为 few-shot 示例，让 API 发现词典遗漏的候选实体。模型只负责提出原文 span，HPO ID 仍由本地本体链接器校验：
 

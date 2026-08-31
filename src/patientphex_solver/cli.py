@@ -246,6 +246,11 @@ def _cmd_fuse_associations(args: argparse.Namespace) -> None:
         read_jsonl(args.primary),
         read_jsonl(args.secondary),
         union_multi=args.union_multi,
+        union_patient_count_range=(
+            tuple(args.union_patient_count_range)
+            if args.union_patient_count_range is not None
+            else None
+        ),
         structure_previous_distance=args.structure_previous_distance,
         structure_next_distance=args.structure_next_distance,
     )
@@ -690,6 +695,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--union-multi",
         action="store_true",
         help="union primary and secondary associations for multi-patient articles",
+    )
+    fuse.add_argument(
+        "--union-patient-count-range",
+        nargs=2,
+        type=int,
+        metavar=("MIN", "MAX"),
+        default=None,
+        help=(
+            "union sources only for articles whose patient count is within the "
+            "inclusive range; overrides the default and --union-multi policies"
+        ),
     )
     fuse.add_argument(
         "--structure-previous-distance",

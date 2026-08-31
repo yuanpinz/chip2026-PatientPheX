@@ -673,6 +673,72 @@ def test_fusion_can_union_multi_patient_sources() -> None:
     ]
 
 
+def test_fusion_can_union_only_for_patient_count_range() -> None:
+    documents = [
+        {"pmc_id": "single", "patient": [{"patient_id": "P1"}]},
+        {
+            "pmc_id": "multi",
+            "patient": [{"patient_id": "P1"}, {"patient_id": "P2"}],
+        },
+    ]
+    base = [
+        {"pmc_id": "single", "pmid": "1", "entities": []},
+        {"pmc_id": "multi", "pmid": "2", "entities": []},
+    ]
+    primary = [
+        {
+            "pmc_id": "single",
+            "association": [{"patient_id": "P1", "phenotype": ["A"]}],
+        },
+        {
+            "pmc_id": "multi",
+            "association": [
+                {"patient_id": "P1", "phenotype": ["A"]},
+                {"patient_id": "P2", "phenotype": []},
+            ],
+        },
+    ]
+    secondary = [
+        {
+            "pmc_id": "single",
+            "association": [{"patient_id": "P1", "phenotype": ["B"]}],
+        },
+        {
+            "pmc_id": "multi",
+            "association": [
+                {"patient_id": "P1", "phenotype": ["B"]},
+                {"patient_id": "P2", "phenotype": ["C"]},
+            ],
+        },
+    ]
+
+    fused = fuse_associations_by_patient_count(
+        documents,
+        base,
+        primary,
+        secondary,
+        union_patient_count_range=(2, 7),
+    )
+    assert fused[0]["association"] == [
+        {"patient_id": "P1", "phenotype": ["B"]}
+    ]
+    assert fused[1]["association"] == [
+        {"patient_id": "P1", "phenotype": ["A", "B"]},
+        {"patient_id": "P2", "phenotype": ["C"]},
+    ]
+
+
+def test_fusion_rejects_invalid_patient_count_range() -> None:
+    with pytest.raises(ValueError, match="patient count range"):
+        fuse_associations_by_patient_count(
+            [],
+            [],
+            [],
+            [],
+            union_patient_count_range=(3, 2),
+        )
+
+
 def test_fusion_votes_across_sources() -> None:
     document = {
         "pmc_id": "multi",

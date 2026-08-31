@@ -62,6 +62,7 @@ def fuse_associations_by_patient_count(
     secondary_rows: list[JsonObject],
     *,
     union_multi: bool = False,
+    union_patient_count_range: tuple[int, int] | None = None,
     structure_previous_distance: int | None = None,
     structure_next_distance: int | None = None,
 ) -> list[JsonObject]:
@@ -71,9 +72,18 @@ def fuse_associations_by_patient_count(
     By default, multi-patient articles use only the secondary joint prediction
     so patients compete for values in one model call. ``union_multi`` enables a
     validated experimental policy that unions both sources for all articles.
+    ``union_patient_count_range`` overrides both policies and unions sources only
+    when the article patient count is within the inclusive range.
     Entity annotations always come from the supplied base rows. Optional local
     structure filtering is applied after fusion.
     """
+    if union_patient_count_range is not None:
+        minimum, maximum = union_patient_count_range
+        if minimum < 1 or maximum < minimum:
+            raise ValueError(
+                "union patient count range must satisfy 1 <= minimum <= maximum"
+            )
+
     base_by_id = _rows_by_id(base_rows)
     primary_by_id = _rows_by_id(primary_rows)
     secondary_by_id = _rows_by_id(secondary_rows)
@@ -89,17 +99,23 @@ def fuse_associations_by_patient_count(
 
         primary_sets = _association_sets(primary)
         secondary_sets = _association_sets(secondary)
-        multi_patient = len(document.get("patient", [])) > 1
+        patient_count = len(document.get("patient", []))
+        multi_patient = patient_count > 1
+        use_union = (
+            union_patient_count_range[0]
+            <= patient_count
+            <= union_patient_count_range[1]
+            if union_patient_count_range is not None
+            else union_multi or not multi_patient
+        )
         associations: list[JsonObject] = []
         for patient in document.get("patient", []):
             patient_id = str(patient["patient_id"])
             secondary_values = secondary_sets.get(patient_id, set())
             selected = (
                 primary_sets.get(patient_id, set()) | secondary_values
-                if union_multi
+                if use_union
                 else secondary_values
-                if multi_patient
-                else primary_sets.get(patient_id, set()) | secondary_values
             )
             ordered: list[str] = []
             for source in (primary, secondary):
