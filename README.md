@@ -154,6 +154,9 @@ uv run patientphex-solver fuse-associations \
   --base outputs/pred_a_cnn_judged_entities.jsonl \
   --primary outputs/pred_a_cnn_s56_joint.jsonl \
   --secondary outputs/pred_a_cnn_modelh_joint_strict.jsonl \
+  --union-multi \
+  --structure-previous-distance 800 \
+  --structure-next-distance 200 \
   --output outputs/pred_a_cnn_final_fused.jsonl
 ```
 

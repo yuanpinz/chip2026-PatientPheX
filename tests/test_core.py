@@ -483,6 +483,23 @@ def test_fusion_unions_single_patient_and_uses_joint_multi_patient() -> None:
     ]
 
 
+def test_fusion_can_union_multi_patient_sources() -> None:
+    document = {
+        "pmc_id": "multi",
+        "patient": [{"patient_id": "P1"}, {"patient_id": "P2"}],
+    }
+    base = [{"pmc_id": "multi", "pmid": "1", "entities": []}]
+    primary = [{"pmc_id": "multi", "association": [{"patient_id": "P1", "phenotype": ["A"]}, {"patient_id": "P2", "phenotype": []}]}]
+    secondary = [{"pmc_id": "multi", "association": [{"patient_id": "P1", "phenotype": ["B"]}, {"patient_id": "P2", "phenotype": ["C"]}]}]
+    fused = fuse_associations_by_patient_count(
+        [document], base, primary, secondary, union_multi=True
+    )
+    assert fused[0]["association"] == [
+        {"patient_id": "P1", "phenotype": ["A", "B"]},
+        {"patient_id": "P2", "phenotype": ["C"]},
+    ]
+
+
 def test_hpo_alias_and_alt_id_resolution(tmp_path) -> None:
     obo = tmp_path / "small.obo"
     obo.write_text(

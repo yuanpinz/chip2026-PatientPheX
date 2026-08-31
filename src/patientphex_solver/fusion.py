@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .association import filter_associations_by_structure
+
 JsonObject = dict[str, Any]
 
 
@@ -21,13 +23,19 @@ def fuse_associations_by_patient_count(
     base_rows: list[JsonObject],
     primary_rows: list[JsonObject],
     secondary_rows: list[JsonObject],
+    *,
+    union_multi: bool = False,
+    structure_previous_distance: int | None = None,
+    structure_next_distance: int | None = None,
 ) -> list[JsonObject]:
     """Fuse two association predictions using a validated patient-count policy.
 
     Single-patient articles use the union of primary and secondary predictions.
-    Multi-patient articles use only the secondary joint prediction so patients
-    compete for values in one model call. Entity annotations always come from
-    the supplied base rows.
+    By default, multi-patient articles use only the secondary joint prediction
+    so patients compete for values in one model call. ``union_multi`` enables a
+    validated experimental policy that unions both sources for all articles.
+    Entity annotations always come from the supplied base rows. Optional local
+    structure filtering is applied after fusion.
     """
     base_by_id = _rows_by_id(base_rows)
     primary_by_id = _rows_by_id(primary_rows)
@@ -50,7 +58,9 @@ def fuse_associations_by_patient_count(
             patient_id = str(patient["patient_id"])
             secondary_values = secondary_sets.get(patient_id, set())
             selected = (
-                secondary_values
+                primary_sets.get(patient_id, set()) | secondary_values
+                if union_multi
+                else secondary_values
                 if multi_patient
                 else primary_sets.get(patient_id, set()) | secondary_values
             )
@@ -63,6 +73,18 @@ def fuse_associations_by_patient_count(
                         if value in selected and value not in ordered:
                             ordered.append(value)
             associations.append({"patient_id": patient_id, "phenotype": ordered})
+
+        if (
+            structure_previous_distance is not None
+            or structure_next_distance is not None
+        ):
+            associations = filter_associations_by_structure(
+                document,
+                list(base.get("entities", [])),
+                associations,
+                previous_distance=structure_previous_distance or 1500,
+                next_distance=structure_next_distance or 300,
+            )
 
         predictions.append(
             {

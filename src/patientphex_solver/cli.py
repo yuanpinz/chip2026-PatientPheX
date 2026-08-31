@@ -233,6 +233,9 @@ def _cmd_fuse_associations(args: argparse.Namespace) -> None:
         read_jsonl(args.base),
         read_jsonl(args.primary),
         read_jsonl(args.secondary),
+        union_multi=args.union_multi,
+        structure_previous_distance=args.structure_previous_distance,
+        structure_next_distance=args.structure_next_distance,
     )
     errors = validate_submission(predictions, expected)
     if errors:
@@ -545,6 +548,23 @@ def build_parser() -> argparse.ArgumentParser:
     fuse.add_argument("--primary", required=True, help="primary association JSONL")
     fuse.add_argument("--secondary", required=True, help="joint association JSONL")
     fuse.add_argument("--output", required=True)
+    fuse.add_argument(
+        "--union-multi",
+        action="store_true",
+        help="union primary and secondary associations for multi-patient articles",
+    )
+    fuse.add_argument(
+        "--structure-previous-distance",
+        type=int,
+        default=None,
+        help="optional local structure filter distance before an entity (characters)",
+    )
+    fuse.add_argument(
+        "--structure-next-distance",
+        type=int,
+        default=None,
+        help="optional local structure filter distance after an entity (characters)",
+    )
     fuse.set_defaults(func=_cmd_fuse_associations)
 
     fuse_cnn = subparsers.add_parser(
