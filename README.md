@@ -358,6 +358,47 @@ uv run patientphex-solver vote-entities \
 合并 20 篇为 `0.760195`；同一次重放中的 v4 分别为 `0.733771`、`0.768009`
 和 `0.757050`。正式 A 集 v5 仍须以平台分数为准。
 
+在 v5 之上，可以只补充三个独立强模型一致认可的患者-表型关联。三个模型均在
+v5 的完整实体集合上联合判断所有患者，不启用 uncertain；最终仅添加三路全票的
+关联，不改变实体。该策略在两组留出上的总分为 `0.741764` 和 `0.769873`，合并
+20 篇由 v5 的 `0.760195` 提升到 `0.761581`。第一组没有新增项，第二组增加 3 个
+TP、0 个 FP，因此保留 v5 作为无额外关联的回退版本：
+
+```bash
+uv run patientphex-solver judge-associations \
+  --split a --candidates outputs/pred_a_cnn_final_v5.jsonl \
+  --joint --model modelE6-397 \
+  --output outputs/pred_a_cnn_e6397_joint_v5.jsonl
+
+uv run patientphex-solver judge-associations \
+  --split a --candidates outputs/pred_a_cnn_final_v5.jsonl \
+  --joint --model modelB3-v4-p \
+  --output outputs/pred_a_cnn_b3v4p_joint_v5.jsonl
+
+uv run patientphex-solver judge-associations \
+  --split a --candidates outputs/pred_a_cnn_final_v5.jsonl \
+  --joint --model modelH-4.6O \
+  --output outputs/pred_a_cnn_h46o_joint_v5.jsonl
+
+uv run patientphex-solver augment-associations \
+  --expected PatientPheX-V1-A/PatientPheX-A.jsonl \
+  --base outputs/pred_a_cnn_final_v5.jsonl \
+  --sources outputs/pred_a_cnn_e6397_joint_v5.jsonl \
+            outputs/pred_a_cnn_b3v4p_joint_v5.jsonl \
+            outputs/pred_a_cnn_h46o_joint_v5.jsonl \
+  --min-votes 3 \
+  --output outputs/pred_a_cnn_final_v7.jsonl
+
+uv run patientphex-solver validate \
+  --expected PatientPheX-V1-A/PatientPheX-A.jsonl \
+  --predicted outputs/pred_a_cnn_final_v7.jsonl
+```
+
+正式 A 集 v7 包含 20 篇文章、1674 个实体和 501 个患者-表型关联值；
+`outputs/pred_a_cnn_final_v7.jsonl` 的 SHA-256 为
+`b62163fe3b1a0ae28a556a11186de80471fa38e450bc1fa13eee32c7f6617cc7`。
+留出结果只用于选择融合规则，是否超过榜首仍以天池平台实际评分为准。
+
 也可以用 held-out 训练文章作为 few-shot 示例，让 API 发现词典遗漏的候选实体。模型只负责提出原文 span，HPO ID 仍由本地本体链接器校验：
 
 ```bash
