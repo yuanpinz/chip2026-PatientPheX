@@ -318,6 +318,46 @@ uv run patientphex-solver validate \
   --predicted outputs/pred_a_cnn_final_v4.jsonl
 ```
 
+在 v4 之上还可以补充文章内明确定义的短缩写。候选由长名称与括号中的缩写确定，
+不需要本地模型；H、S5.6、S5.5 三路 API 必须全部接受同一 occurrence，并只保留
+长度不超过 3 的短缩写。该限制用于排除 `MODY`、`TRMA` 等在留出集上大量误报的
+长疾病缩写：
+
+```bash
+uv run patientphex-solver abbreviation-candidates \
+  --expected PatientPheX-V1-A/PatientPheX-A.jsonl \
+  --base outputs/pred_a_cnn_final_v4_base.jsonl \
+  --output outputs/pred_a_abbreviation_candidates.jsonl
+
+uv run patientphex-solver judge-entities \
+  --split a --candidates outputs/pred_a_abbreviation_candidates.jsonl \
+  --model modelH \
+  --output outputs/pred_a_abbreviation_judged_h.jsonl
+
+uv run patientphex-solver judge-entities \
+  --split a --candidates outputs/pred_a_abbreviation_candidates.jsonl \
+  --model modelS5_6S \
+  --output outputs/pred_a_abbreviation_judged_s56.jsonl
+
+uv run patientphex-solver judge-entities \
+  --split a --candidates outputs/pred_a_abbreviation_candidates.jsonl \
+  --model modelS5_5 --batch-size 10 --calibration-per-label 6 \
+  --max-tokens 4000 \
+  --output outputs/pred_a_abbreviation_judged_s55.jsonl
+
+uv run patientphex-solver vote-entities \
+  --base outputs/pred_a_cnn_final_v4.jsonl \
+  --sources outputs/pred_a_abbreviation_judged_h.jsonl \
+            outputs/pred_a_abbreviation_judged_s56.jsonl \
+            outputs/pred_a_abbreviation_judged_s55.jsonl \
+  --min-votes 3 --max-text-length 3 \
+  --output outputs/pred_a_cnn_final_v5.jsonl
+```
+
+短缩写全票策略在两组 10 篇留出上的总分为 `0.741764` 和 `0.767817`，
+合并 20 篇为 `0.760195`；同一次重放中的 v4 分别为 `0.733771`、`0.768009`
+和 `0.757050`。正式 A 集 v5 仍须以平台分数为准。
+
 也可以用 held-out 训练文章作为 few-shot 示例，让 API 发现词典遗漏的候选实体。模型只负责提出原文 span，HPO ID 仍由本地本体链接器校验：
 
 ```bash

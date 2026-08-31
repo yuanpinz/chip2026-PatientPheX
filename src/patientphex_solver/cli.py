@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+from .abbreviations import discover_abbreviation_entities
 from .association import (
     associate_by_proximity,
     associate_consensus_structured_with_llm,
@@ -368,9 +369,39 @@ def _cmd_vote_entities(args: argparse.Namespace) -> None:
         read_jsonl(args.base),
         [read_jsonl(path) for path in args.sources],
         min_votes=args.min_votes,
+        max_text_length=args.max_text_length,
     )
     write_jsonl(args.output, predictions)
     print(f"wrote {args.output} ({len(predictions)} documents)")
+
+
+def _cmd_abbreviation_candidates(args: argparse.Namespace) -> None:
+    documents = read_jsonl(args.expected)
+    documents_by_id = {str(row["pmc_id"]): row for row in documents}
+    predictions: list[dict] = []
+    for base in read_jsonl(args.base):
+        pmc_id = str(base["pmc_id"])
+        document = documents_by_id.get(pmc_id)
+        if document is None:
+            raise ValueError(f"base document {pmc_id} is not in --expected")
+        additions = discover_abbreviation_entities(
+            document,
+            list(base.get("entities", [])),
+        )
+        predictions.append(
+            {
+                "pmc_id": base["pmc_id"],
+                "pmid": base.get("pmid"),
+                "entities": additions,
+                "association": [],
+            }
+        )
+    write_jsonl(args.output, predictions)
+    total = sum(len(row["entities"]) for row in predictions)
+    print(
+        f"wrote {args.output} ({len(predictions)} documents, "
+        f"{total} abbreviation candidates)"
+    )
 
 
 def _cmd_judge_entities(args: argparse.Namespace) -> None:
@@ -729,8 +760,31 @@ def build_parser() -> argparse.ArgumentParser:
     vote_entities_parser.add_argument("--base", required=True)
     vote_entities_parser.add_argument("--sources", required=True, nargs="+")
     vote_entities_parser.add_argument("--min-votes", type=int, default=2)
+    vote_entities_parser.add_argument(
+        "--max-text-length",
+        type=int,
+        default=None,
+        help="optional maximum source text length for voted additions",
+    )
     vote_entities_parser.add_argument("--output", required=True)
     vote_entities_parser.set_defaults(func=_cmd_vote_entities)
+
+    abbreviation_candidates = subparsers.add_parser(
+        "abbreviation-candidates",
+        help="propose repeated occurrences of explicitly defined phenotype acronyms",
+    )
+    abbreviation_candidates.add_argument(
+        "--expected",
+        required=True,
+        help="JSONL containing article full text",
+    )
+    abbreviation_candidates.add_argument(
+        "--base",
+        required=True,
+        help="base entity JSONL used to resolve acronym definitions",
+    )
+    abbreviation_candidates.add_argument("--output", required=True)
+    abbreviation_candidates.set_defaults(func=_cmd_abbreviation_candidates)
 
     judge = subparsers.add_parser(
         "judge-entities",

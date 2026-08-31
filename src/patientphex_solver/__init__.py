@@ -1,5 +1,6 @@
 """PatientPheX competition solver."""
 
+from .abbreviations import discover_abbreviation_entities
 from .association import (
     associate_by_proximity,
     associate_joint_structured_with_llm,
@@ -34,6 +35,7 @@ __all__ = [
     "associate_with_llm",
     "augment_associations_by_vote",
     "cnn_additions",
+    "discover_abbreviation_entities",
     "discover_entities_article_with_llm",
     "discover_entities_with_llm",
     "discover_patient_phenotypes_with_llm",

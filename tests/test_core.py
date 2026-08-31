@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from patientphex_solver.abbreviations import discover_abbreviation_entities
 from patientphex_solver.association import (
     _filter_selected_indices_by_structure,
     filter_associations_by_structure,
@@ -170,14 +171,33 @@ def test_vote_entities_requires_matching_source_support() -> None:
         "note": None,
     }
     second = {**first}
-    third = {**first, "offset": 20, "text": "other"}
+    third = {**first, "offset": 20, "length": 6, "text": "longer"}
     source_rows = [
         [{"pmc_id": "p1", "entities": [first]}],
         [{"pmc_id": "p1", "entities": [second, third]}],
         [{"pmc_id": "p1", "entities": [third]}],
     ]
     result = vote_entities(base, source_rows, min_votes=2)
-    assert [entity["text"] for entity in result[0]["entities"]] == ["first", "other"]
+    assert [entity["text"] for entity in result[0]["entities"]] == ["first", "longer"]
+
+    short_only = vote_entities(
+        base,
+        source_rows,
+        min_votes=2,
+        max_text_length=5,
+    )
+    assert [entity["text"] for entity in short_only[0]["entities"]] == ["first"]
+
+
+def test_vote_entities_rejects_invalid_text_length() -> None:
+    base = [{"pmc_id": "p1", "entities": [], "association": []}]
+    with pytest.raises(ValueError, match="max_text_length"):
+        vote_entities(
+            base,
+            [[{"pmc_id": "p1", "entities": []}]],
+            min_votes=1,
+            max_text_length=0,
+        )
 
 
 def test_parse_json_response_ignores_trailing_explanation() -> None:
@@ -1532,3 +1552,83 @@ def test_structure_filter_sorts_patient_anchors_by_article_offset() -> None:
         previous_distance=100,
         next_distance=0,
     ) == {"P1": {0}}
+
+
+def test_abbreviation_candidates_propagate_forward_definition() -> None:
+    text = "Lattice corneal dystrophy (LCD). LCD progressed."
+    long_form = "Lattice corneal dystrophy"
+    document = {
+        "pmc_id": "1",
+        "full_text": [{"section_type": "CASE", "offset": 100, "text": text}],
+    }
+    base = [
+        {
+            "identifier": "HP:0001149",
+            "offset": 100,
+            "length": len(long_form),
+            "text": long_form,
+            "note": None,
+        }
+    ]
+
+    candidates = discover_abbreviation_entities(document, base)
+
+    assert [entity["offset"] for entity in candidates] == [
+        100 + text.index("LCD"),
+        100 + text.rindex("LCD"),
+    ]
+    assert {entity["identifier"] for entity in candidates} == {"HP:0001149"}
+
+
+def test_abbreviation_candidates_support_reverse_definition() -> None:
+    text = "DM (diabetes mellitus) was diagnosed; DM persisted."
+    long_form = "diabetes mellitus"
+    document = {
+        "pmc_id": "1",
+        "full_text": [{"section_type": "CASE", "offset": 0, "text": text}],
+    }
+    base = [
+        {
+            "identifier": "HP:0000819",
+            "offset": text.index(long_form),
+            "length": len(long_form),
+            "text": long_form,
+            "note": None,
+        }
+    ]
+
+    candidates = discover_abbreviation_entities(document, base)
+
+    assert [entity["offset"] for entity in candidates] == [
+        text.index("DM"),
+        text.rindex("DM"),
+    ]
+    assert {entity["identifier"] for entity in candidates} == {"HP:0000819"}
+
+
+def test_abbreviation_candidates_drop_ambiguous_definitions() -> None:
+    text = "Developmental delay (DD). Distal dysplasia (DD). DD was present."
+    first = "Developmental delay"
+    second = "Distal dysplasia"
+    document = {
+        "pmc_id": "1",
+        "full_text": [{"section_type": "CASE", "offset": 0, "text": text}],
+    }
+    base = [
+        {
+            "identifier": "HP:0001263",
+            "offset": text.index(first),
+            "length": len(first),
+            "text": first,
+            "note": None,
+        },
+        {
+            "identifier": "HP:9999999",
+            "offset": text.index(second),
+            "length": len(second),
+            "text": second,
+            "note": None,
+        },
+    ]
+
+    assert discover_abbreviation_entities(document, base) == []

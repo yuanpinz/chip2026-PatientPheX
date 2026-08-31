@@ -451,12 +451,15 @@ def vote_entities(
     source_rows: list[list[JsonObject]],
     *,
     min_votes: int = 2,
+    max_text_length: int | None = None,
 ) -> list[JsonObject]:
     """Merge entity candidates supported by a minimum number of sources."""
     if not source_rows:
         raise ValueError("at least one entity source is required")
     if min_votes < 1 or min_votes > len(source_rows):
         raise ValueError("min_votes must be between 1 and the number of sources")
+    if max_text_length is not None and max_text_length < 1:
+        raise ValueError("max_text_length must be positive")
     source_by_id = [{str(row["pmc_id"]): row for row in rows} for rows in source_rows]
     predictions: list[JsonObject] = []
     for base in base_rows:
@@ -484,6 +487,10 @@ def vote_entities(
             examples[key]
             for key, count in counts.items()
             if count >= min_votes
+            and (
+                max_text_length is None
+                or len(str(examples[key].get("text", ""))) <= max_text_length
+            )
         ]
         predictions.append(
             {
