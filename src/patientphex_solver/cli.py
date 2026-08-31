@@ -18,7 +18,7 @@ from .association_judge import (
     build_association_calibration_examples,
 )
 from .cnn_fusion import CnnFusionConfig, fuse_cnn_entities
-from .entities import ExtractorConfig, GazetteerExtractor, merge_entities
+from .entities import ExtractorConfig, GazetteerExtractor, merge_entities, vote_entities
 from .entity_judge import build_calibration_examples, judge_entities_with_llm
 from .evaluation import evaluate
 from .fusion import (
@@ -363,6 +363,16 @@ def _cmd_merge_entities(args: argparse.Namespace) -> None:
     print(f"wrote {args.output} ({len(predictions)} documents)")
 
 
+def _cmd_vote_entities(args: argparse.Namespace) -> None:
+    predictions = vote_entities(
+        read_jsonl(args.base),
+        [read_jsonl(path) for path in args.sources],
+        min_votes=args.min_votes,
+    )
+    write_jsonl(args.output, predictions)
+    print(f"wrote {args.output} ({len(predictions)} documents)")
+
+
 def _cmd_judge_entities(args: argparse.Namespace) -> None:
     train_path, test_path, ontology_path = _paths(args)
     train = read_jsonl(train_path)
@@ -412,6 +422,7 @@ def _cmd_judge_entities(args: argparse.Namespace) -> None:
             document_calibration,
             batch_size=args.batch_size,
             calibration_per_label=args.calibration_per_label,
+            max_tokens=args.max_tokens,
             include_uncertain=args.include_uncertain,
         )
         association = candidate_row.get("association")
@@ -711,6 +722,16 @@ def build_parser() -> argparse.ArgumentParser:
     merge.add_argument("--output", required=True)
     merge.set_defaults(func=_cmd_merge_entities)
 
+    vote_entities_parser = subparsers.add_parser(
+        "vote-entities",
+        help="merge entity candidates supported by multiple model outputs",
+    )
+    vote_entities_parser.add_argument("--base", required=True)
+    vote_entities_parser.add_argument("--sources", required=True, nargs="+")
+    vote_entities_parser.add_argument("--min-votes", type=int, default=2)
+    vote_entities_parser.add_argument("--output", required=True)
+    vote_entities_parser.set_defaults(func=_cmd_vote_entities)
+
     judge = subparsers.add_parser(
         "judge-entities",
         help="filter an entity candidate JSONL with a calibrated API model",
@@ -723,6 +744,12 @@ def build_parser() -> argparse.ArgumentParser:
     judge.add_argument("--cache-dir", default="cache/llm")
     judge.add_argument("--batch-size", type=int, default=40)
     judge.add_argument("--calibration-per-label", type=int, default=10)
+    judge.add_argument(
+        "--max-tokens",
+        type=int,
+        default=1800,
+        help="maximum model output tokens; reasoning-heavy models may need 4000 or more",
+    )
     judge.add_argument("--include-uncertain", action="store_true")
     judge.set_defaults(func=_cmd_judge_entities)
 

@@ -19,7 +19,11 @@ from patientphex_solver.cnn_fusion import (
     cnn_additions,
     fuse_cnn_entities,
 )
-from patientphex_solver.entities import GazetteerExtractor, merge_entities
+from patientphex_solver.entities import (
+    GazetteerExtractor,
+    merge_entities,
+    vote_entities,
+)
 from patientphex_solver.entity_judge import (
     build_calibration_examples,
     judge_entities_with_llm,
@@ -155,6 +159,27 @@ def test_merge_entities_combines_multiple_sources_and_deduplicates() -> None:
     assert merge_entities([first], [first, second], []) == [first, second]
 
 
+def test_vote_entities_requires_matching_source_support() -> None:
+    base = [{"pmc_id": "p1", "pmid": "m1", "entities": [], "association": []}]
+    first = {
+        "identifier": "HP:1",
+        "type": "Phenotype",
+        "offset": 10,
+        "length": 5,
+        "text": "first",
+        "note": None,
+    }
+    second = {**first}
+    third = {**first, "offset": 20, "text": "other"}
+    source_rows = [
+        [{"pmc_id": "p1", "entities": [first]}],
+        [{"pmc_id": "p1", "entities": [second, third]}],
+        [{"pmc_id": "p1", "entities": [third]}],
+    ]
+    result = vote_entities(base, source_rows, min_votes=2)
+    assert [entity["text"] for entity in result[0]["entities"]] == ["first", "other"]
+
+
 def test_parse_json_response_ignores_trailing_explanation() -> None:
     assert parse_json_response(
         '{"accepted_indices":[1]}\nI selected the explicit finding.'
@@ -232,9 +257,12 @@ is_a: HP:0000118 ! root
         },
     ]
 
+    requested_max_tokens = []
+
     class FakeClient:
         def chat_json(self, messages, *, max_tokens=8000):
             assert "CALIBRATION EXAMPLES" in messages[1]["content"]
+            requested_max_tokens.append(max_tokens)
             return {"accepted_indices": [1], "uncertain_indices": [0]}
 
     assert judge_entities_with_llm(
@@ -243,7 +271,9 @@ is_a: HP:0000118 ! root
         ontology,
         FakeClient(),
         calibration,
+        max_tokens=4000,
     ) == [candidates[1]]
+    assert requested_max_tokens == [4000]
 
 
 def test_calibrated_association_judge_groups_occurrences(tmp_path) -> None:

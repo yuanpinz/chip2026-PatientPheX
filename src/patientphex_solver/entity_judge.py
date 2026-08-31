@@ -247,6 +247,7 @@ def judge_entities_with_llm(
     *,
     batch_size: int = 40,
     calibration_per_label: int = 10,
+    max_tokens: int = 1800,
     include_uncertain: bool = False,
 ) -> list[JsonObject]:
     positive = [item for item in candidates if item.get("note") != "NO"]
@@ -269,7 +270,7 @@ def judge_entities_with_llm(
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": _judge_prompt(document, rows, examples)},
             ],
-            max_tokens=1800,
+            max_tokens=max_tokens,
         )
         allowed = set(range(len(batch)))
         selected = _response_indices(response, "accepted_indices", allowed)

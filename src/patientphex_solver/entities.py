@@ -444,3 +444,53 @@ def merge_entities(*collections: Iterable[JsonObject]) -> list[JsonObject]:
         by_key.values(),
         key=lambda item: (int(item["offset"]), -int(item["length"]), str(item["identifier"])),
     )
+
+
+def vote_entities(
+    base_rows: list[JsonObject],
+    source_rows: list[list[JsonObject]],
+    *,
+    min_votes: int = 2,
+) -> list[JsonObject]:
+    """Merge entity candidates supported by a minimum number of sources."""
+    if not source_rows:
+        raise ValueError("at least one entity source is required")
+    if min_votes < 1 or min_votes > len(source_rows):
+        raise ValueError("min_votes must be between 1 and the number of sources")
+    source_by_id = [{str(row["pmc_id"]): row for row in rows} for rows in source_rows]
+    predictions: list[JsonObject] = []
+    for base in base_rows:
+        pmc_id = str(base["pmc_id"])
+        try:
+            sources = [mapping[pmc_id] for mapping in source_by_id]
+        except KeyError as exc:
+            raise ValueError(f"missing entity source row for PMC {pmc_id}") from exc
+        counts: dict[tuple[int, int, str, str | None], int] = {}
+        examples: dict[tuple[int, int, str, str | None], JsonObject] = {}
+        for source in sources:
+            seen: set[tuple[int, int, str, str | None]] = set()
+            for entity in source.get("entities", []):
+                key = (
+                    int(entity["offset"]),
+                    int(entity["length"]),
+                    str(entity["identifier"]),
+                    entity.get("note"),
+                )
+                seen.add(key)
+                examples.setdefault(key, entity)
+            for key in seen:
+                counts[key] = counts.get(key, 0) + 1
+        additions = [
+            examples[key]
+            for key, count in counts.items()
+            if count >= min_votes
+        ]
+        predictions.append(
+            {
+                "pmc_id": base["pmc_id"],
+                "pmid": base.get("pmid"),
+                "entities": merge_entities(list(base.get("entities", [])), additions),
+                "association": list(base.get("association", [])),
+            }
+        )
+    return predictions

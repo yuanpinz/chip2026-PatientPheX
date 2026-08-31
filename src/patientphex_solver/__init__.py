@@ -9,7 +9,7 @@ from .association import (
     propagate_explicit_group_associations,
 )
 from .cnn_fusion import CnnFusionConfig, cnn_additions, fuse_cnn_entities
-from .entities import ExtractorConfig, GazetteerExtractor, merge_entities
+from .entities import ExtractorConfig, GazetteerExtractor, merge_entities, vote_entities
 from .evaluation import evaluate
 from .fusion import augment_associations_by_vote, fuse_associations_by_vote
 from .io import read_jsonl, validate_submission, write_jsonl
@@ -44,6 +44,7 @@ __all__ = [
     "propagate_explicit_group_associations",
     "read_jsonl",
     "validate_submission",
+    "vote_entities",
     "write_jsonl",
 ]
 
