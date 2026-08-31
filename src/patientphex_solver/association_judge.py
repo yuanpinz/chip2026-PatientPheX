@@ -339,6 +339,7 @@ def associate_values_calibrated_with_llm(
     structure_multi_patient: bool = True,
     previous_distance: int = 1500,
     next_distance: int = 300,
+    max_tokens: int = 1200,
 ) -> list[JsonObject]:
     grouped = _group_entities(entities)
     all_values = sorted(grouped, key=lambda value: int(grouped[value][0]["offset"]))
@@ -374,7 +375,7 @@ def associate_values_calibrated_with_llm(
                         "content": _prompt(document, patient, rows, examples),
                     },
                 ],
-                max_tokens=1200,
+                max_tokens=max_tokens,
             )
             indices = _indices(response, "associated_indices", len(values))
             if include_uncertain:
@@ -410,6 +411,7 @@ def associate_values_joint_calibrated_with_llm(
     structure_multi_patient: bool = True,
     previous_distance: int = 1500,
     next_distance: int = 300,
+    max_tokens: int = 1500,
 ) -> list[JsonObject]:
     """Assign unique phenotype values jointly while preserving occurrence evidence."""
     patients = list(document.get("patient", []))
@@ -447,7 +449,7 @@ def associate_values_joint_calibrated_with_llm(
                         "content": _joint_prompt(document, patients, rows, examples),
                     },
                 ],
-                max_tokens=1500,
+                max_tokens=max_tokens,
             )
         except (json.JSONDecodeError, RuntimeError):
             # One malformed or failed batch must not discard earlier batches.

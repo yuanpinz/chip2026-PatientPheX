@@ -519,6 +519,11 @@ def _cmd_judge_associations(args: argparse.Namespace) -> None:
             include_uncertain=args.include_uncertain,
             exclude_calibration_pmc_id=pmc_id if args.split == "train" else None,
             structure_multi_patient=not args.no_structure_filter,
+            max_tokens=(
+                args.max_tokens
+                if args.max_tokens is not None
+                else (1500 if args.joint else 1200)
+            ),
         )
         predictions.append(
             {
@@ -822,6 +827,12 @@ def build_parser() -> argparse.ArgumentParser:
     judge_associations.add_argument("--include-uncertain", action="store_true")
     judge_associations.add_argument("--no-structure-filter", action="store_true")
     judge_associations.add_argument("--joint", action="store_true")
+    judge_associations.add_argument(
+        "--max-tokens",
+        type=int,
+        default=None,
+        help="maximum model output tokens; reasoning-heavy models may need 4000 or more",
+    )
     judge_associations.add_argument("--limit", type=int, default=None)
     judge_associations.set_defaults(func=_cmd_judge_associations)
 
