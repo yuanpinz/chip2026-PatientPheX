@@ -245,3 +245,63 @@ def fuse_associations_by_vote(
             }
         )
     return predictions
+
+
+def augment_associations_by_vote(
+    documents: list[JsonObject],
+    base_rows: list[JsonObject],
+    source_rows: list[list[JsonObject]],
+    *,
+    min_votes: int = 1,
+    structure_previous_distance: int | None = None,
+    structure_next_distance: int | None = None,
+    structure_wide_sections: set[str] | None = None,
+    structure_wide_previous_distance: int | None = None,
+    structure_wide_next_distance: int | None = None,
+    propagate_explicit_groups: bool = False,
+) -> list[JsonObject]:
+    """Add voted associations from extra candidates to an existing prediction."""
+
+    voted = fuse_associations_by_vote(
+        documents,
+        base_rows,
+        source_rows,
+        min_votes=min_votes,
+        structure_previous_distance=structure_previous_distance,
+        structure_next_distance=structure_next_distance,
+        structure_wide_sections=structure_wide_sections,
+        structure_wide_previous_distance=structure_wide_previous_distance,
+        structure_wide_next_distance=structure_wide_next_distance,
+        propagate_explicit_groups=propagate_explicit_groups,
+    )
+    base_by_id = _rows_by_id(base_rows)
+    voted_by_id = _rows_by_id(voted)
+    predictions: list[JsonObject] = []
+    for document in documents:
+        pmc_id = str(document["pmc_id"])
+        try:
+            base = base_by_id[pmc_id]
+            extra = voted_by_id[pmc_id]
+        except KeyError as exc:
+            raise ValueError(f"missing augmentation input for PMC {pmc_id}") from exc
+        extra_values = {
+            str(item["patient_id"]): list(item.get("phenotype", []))
+            for item in extra.get("association", [])
+        }
+        associations: list[JsonObject] = []
+        for base_association in base.get("association", []):
+            patient_id = str(base_association["patient_id"])
+            ordered = list(base_association.get("phenotype", []))
+            for value in extra_values.get(patient_id, []):
+                if value not in ordered:
+                    ordered.append(value)
+            associations.append({"patient_id": patient_id, "phenotype": ordered})
+        predictions.append(
+            {
+                "pmc_id": base["pmc_id"],
+                "pmid": base.get("pmid"),
+                "entities": list(base.get("entities", [])),
+                "association": associations,
+            }
+        )
+    return predictions

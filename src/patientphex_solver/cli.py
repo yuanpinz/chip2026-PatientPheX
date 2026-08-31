@@ -21,7 +21,11 @@ from .cnn_fusion import CnnFusionConfig, fuse_cnn_entities
 from .entities import ExtractorConfig, GazetteerExtractor, merge_entities
 from .entity_judge import build_calibration_examples, judge_entities_with_llm
 from .evaluation import evaluate
-from .fusion import fuse_associations_by_patient_count, fuse_associations_by_vote
+from .fusion import (
+    augment_associations_by_vote,
+    fuse_associations_by_patient_count,
+    fuse_associations_by_vote,
+)
 from .io import read_jsonl, validate_submission, write_jsonl
 from .llm import BigModelClient
 from .llm_entities import (
@@ -275,6 +279,31 @@ def _cmd_vote_associations(args: argparse.Namespace) -> None:
     print(f"wrote {args.output} ({len(predictions)} documents)")
 
 
+def _cmd_augment_associations(args: argparse.Namespace) -> None:
+    expected = read_jsonl(args.expected)
+    predictions = augment_associations_by_vote(
+        expected,
+        read_jsonl(args.base),
+        [read_jsonl(path) for path in args.sources],
+        min_votes=args.min_votes,
+        structure_previous_distance=args.structure_previous_distance,
+        structure_next_distance=args.structure_next_distance,
+        structure_wide_sections=(
+            {value.upper() for value in args.structure_wide_sections}
+            if args.structure_wide_sections
+            else None
+        ),
+        structure_wide_previous_distance=args.structure_wide_previous_distance,
+        structure_wide_next_distance=args.structure_wide_next_distance,
+        propagate_explicit_groups=args.propagate_explicit_groups,
+    )
+    errors = validate_submission(predictions, expected)
+    if errors:
+        raise SystemExit("submission validation failed:\n" + "\n".join(errors[:30]))
+    write_jsonl(args.output, predictions)
+    print(f"wrote {args.output} ({len(predictions)} documents)")
+
+
 def _cmd_fuse_cnn_entities(args: argparse.Namespace) -> None:
     base_rows = read_jsonl(args.base)
     predictions = fuse_cnn_entities(
@@ -310,13 +339,14 @@ def _cmd_fuse_cnn_entities(args: argparse.Namespace) -> None:
 
 def _cmd_merge_entities(args: argparse.Namespace) -> None:
     base_rows = read_jsonl(args.base)
-    additions_by_id = {
-        str(row["pmc_id"]): row for row in read_jsonl(args.additions)
-    }
+    additions_by_id: dict[str, list[dict]] = {}
+    for additions_path in args.additions:
+        for row in read_jsonl(additions_path):
+            additions_by_id.setdefault(str(row["pmc_id"]), []).append(row)
     predictions = []
     for base in base_rows:
-        additions = additions_by_id.get(str(base["pmc_id"]))
-        if additions is None:
+        additions_rows = additions_by_id.get(str(base["pmc_id"]))
+        if additions_rows is None:
             raise ValueError(f"missing additions row for PMC {base['pmc_id']}")
         predictions.append(
             {
@@ -324,7 +354,7 @@ def _cmd_merge_entities(args: argparse.Namespace) -> None:
                 "pmid": base.get("pmid"),
                 "entities": merge_entities(
                     list(base.get("entities", [])),
-                    list(additions.get("entities", [])),
+                    *(list(row.get("entities", [])) for row in additions_rows),
                 ),
                 "association": list(base.get("association", [])),
             }
@@ -628,6 +658,23 @@ def build_parser() -> argparse.ArgumentParser:
     vote.add_argument("--output", required=True)
     vote.set_defaults(func=_cmd_vote_associations)
 
+    augment = subparsers.add_parser(
+        "augment-associations",
+        help="add voted associations for extra entities to an existing prediction",
+    )
+    augment.add_argument("--expected", required=True)
+    augment.add_argument("--base", required=True)
+    augment.add_argument("--sources", required=True, nargs="+")
+    augment.add_argument("--min-votes", type=int, default=1)
+    augment.add_argument("--structure-previous-distance", type=int, default=None)
+    augment.add_argument("--structure-next-distance", type=int, default=None)
+    augment.add_argument("--structure-wide-sections", nargs="+", default=None)
+    augment.add_argument("--structure-wide-previous-distance", type=int, default=None)
+    augment.add_argument("--structure-wide-next-distance", type=int, default=None)
+    augment.add_argument("--propagate-explicit-groups", action="store_true")
+    augment.add_argument("--output", required=True)
+    augment.set_defaults(func=_cmd_augment_associations)
+
     fuse_cnn = subparsers.add_parser(
         "fuse-cnn-entities",
         help="add conservative high-confidence PhenoTagger CNN entities",
@@ -657,10 +704,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     merge = subparsers.add_parser(
         "merge-entities",
-        help="merge an additions JSONL into a base entity JSONL",
+        help="merge one or more additions JSONL files into a base entity JSONL",
     )
     merge.add_argument("--base", required=True)
-    merge.add_argument("--additions", required=True)
+    merge.add_argument("--additions", required=True, nargs="+")
     merge.add_argument("--output", required=True)
     merge.set_defaults(func=_cmd_merge_entities)
 

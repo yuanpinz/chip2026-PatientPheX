@@ -19,13 +19,14 @@ from patientphex_solver.cnn_fusion import (
     cnn_additions,
     fuse_cnn_entities,
 )
-from patientphex_solver.entities import GazetteerExtractor
+from patientphex_solver.entities import GazetteerExtractor, merge_entities
 from patientphex_solver.entity_judge import (
     build_calibration_examples,
     judge_entities_with_llm,
 )
 from patientphex_solver.evaluation import evaluate
 from patientphex_solver.fusion import (
+    augment_associations_by_vote,
     fuse_associations_by_patient_count,
     fuse_associations_by_vote,
 )
@@ -132,6 +133,26 @@ def test_cnn_fusion_preserves_association_and_strips_score() -> None:
             "note": None,
         }
     ]
+
+
+def test_merge_entities_combines_multiple_sources_and_deduplicates() -> None:
+    first = {
+        "identifier": "HP:1",
+        "type": "Phenotype",
+        "offset": 10,
+        "length": 5,
+        "text": "first",
+        "note": None,
+    }
+    second = {
+        "identifier": "HP:2",
+        "type": "Phenotype",
+        "offset": 20,
+        "length": 6,
+        "text": "second",
+        "note": None,
+    }
+    assert merge_entities([first], [first, second], []) == [first, second]
 
 
 def test_parse_json_response_ignores_trailing_explanation() -> None:
@@ -646,6 +667,30 @@ def test_fusion_rejects_invalid_single_patient_source_indices() -> None:
             single_patient_source_indices=[0],
             single_patient_min_votes=0,
         )
+
+
+def test_augment_associations_preserves_base_and_adds_voted_values() -> None:
+    documents = [
+        {"pmc_id": "single", "patient": [{"patient_id": "P1"}], "full_text": []}
+    ]
+    base = [
+        {
+            "pmc_id": "single",
+            "pmid": None,
+            "entities": [],
+            "association": [{"patient_id": "P1", "phenotype": ["A"]}],
+        }
+    ]
+    source = [
+        {
+            "pmc_id": "single",
+            "association": [{"patient_id": "P1", "phenotype": ["B"]}],
+        }
+    ]
+    augmented = augment_associations_by_vote(documents, base, [source])
+    assert augmented[0]["association"] == [
+        {"patient_id": "P1", "phenotype": ["A", "B"]}
+    ]
 
 
 def test_explicit_group_propagation_handles_both_listed_patients() -> None:

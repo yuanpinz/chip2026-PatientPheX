@@ -189,7 +189,76 @@ uv run patientphex-solver validate \
   --predicted outputs/pred_a_cnn_final_v2.jsonl
 ```
 
-最终策略在两组互不重叠的 10 篇留出文章上分别得到 `0.719385` 和 `0.742198`，合并 20 篇评分为 `0.735699`；旧五源融合对应成绩为 `0.716220`、`0.732178` 和 `0.727640`。留出结果仅用于本地模型选择，最终榜单成绩仍以提交平台返回值为准。
+最终五源策略在两组互不重叠的 10 篇留出文章上分别得到 `0.719385` 和 `0.742198`，合并 20 篇评分为 `0.735699`；加入 K1 严格实体补充、S5.6 扩展 CNN 实体补充及 H 联合关联增强后，留出分数为 `0.728466`、`0.764182`，合并为 `0.752624`。留出结果仅用于本地模型选择，最终榜单成绩仍以提交平台返回值为准。
+
+最终实体增强路线不需要本机 GPU 训练。它复用已经生成的 PhenoTagger 原始候选，先用 K1 严格模式补充保守候选，再从 H-uncertain + K1-strict 实体上提取更宽松的 CNN 候选，并用 S5.6 严格模式裁决：
+
+```bash
+uv run patientphex-solver judge-entities \
+  --split a \
+  --candidates outputs/pred_a_cnn_additions.jsonl \
+  --model modelK1-instruct-2507 \
+  --output outputs/pred_a_cnn_additions_judged_k1.jsonl
+
+uv run patientphex-solver merge-entities \
+  --base outputs/pred_a_cnn_judged_entities.jsonl \
+  --additions outputs/pred_a_cnn_additions_judged_k1.jsonl \
+  --output outputs/pred_a_cnn_judged_entities_hu_ks.jsonl
+
+uv run patientphex-solver fuse-cnn-entities \
+  --base outputs/pred_a_cnn_judged_entities_hu_ks.jsonl \
+  --cnn outputs/phenotagger_cnn_a_raw.jsonl \
+  --min-score 0.95 \
+  --min-text-length 2 \
+  --max-per-identifier 100 \
+  --allow-overlap \
+  --output outputs/pred_a_cnn_broad095.jsonl \
+  --additions-output outputs/pred_a_cnn_broad095_additions.jsonl
+
+uv run patientphex-solver judge-entities \
+  --split a \
+  --candidates outputs/pred_a_cnn_broad095_additions.jsonl \
+  --model modelS5_6S \
+  --output outputs/pred_a_cnn_broad095_judged_s56.jsonl
+```
+
+`judge-entities` 未指定 `--include-uncertain`，因此上面两次 API 裁决都只保留明确接受的实体。最终合并支持一次传入多个裁决文件，重复实体会按 offset、length、identifier 和 note 去重：
+
+```bash
+uv run patientphex-solver merge-entities \
+  --base outputs/pred_a_cnn_final_v2.jsonl \
+  --additions outputs/pred_a_cnn_additions_judged_k1.jsonl \
+             outputs/pred_a_cnn_broad095_judged_s56.jsonl \
+  --output outputs/pred_a_cnn_final_v3_base.jsonl
+```
+
+对于只新增实体的关联，可以保留已有五源结果，再把新实体的 modelH 联合关联按文章结构过滤后并入：
+
+```bash
+uv run patientphex-solver judge-associations \
+  --split a --candidates outputs/pred_a_cnn_broad095_judged_s56.jsonl \
+  --joint --model modelH \
+  --output outputs/pred_a_cnn_broad095_assoc_h.jsonl
+
+uv run patientphex-solver augment-associations \
+  --expected PatientPheX-V1-A/PatientPheX-A.jsonl \
+  --base outputs/pred_a_cnn_final_v3_base.jsonl \
+  --sources outputs/pred_a_cnn_broad095_assoc_h.jsonl \
+  --min-votes 1 \
+  --structure-previous-distance 800 \
+  --structure-next-distance 200 \
+  --structure-wide-sections CASE RESULTS FIG TABLE \
+  --structure-wide-previous-distance 5000 \
+  --structure-wide-next-distance 200 \
+  --propagate-explicit-groups \
+  --output outputs/pred_a_cnn_final_v3.jsonl
+
+uv run patientphex-solver validate \
+  --expected PatientPheX-V1-A/PatientPheX-A.jsonl \
+  --predicted outputs/pred_a_cnn_final_v3.jsonl
+```
+
+正式 A 集结果包含 20 篇文章、1663 个实体和 506 个患者-表型关联值；`outputs/pred_a_cnn_final_v3.jsonl` 的 SHA-256 为 `95a3758fac89cbc0cdddcfc57cba2c19526fbedd3ee8cb70590413742d586133`。
 
 也可以用 held-out 训练文章作为 few-shot 示例，让 API 发现词典遗漏的候选实体。模型只负责提出原文 span，HPO ID 仍由本地本体链接器校验：
 

@@ -11,7 +11,7 @@ from .association import (
 from .cnn_fusion import CnnFusionConfig, cnn_additions, fuse_cnn_entities
 from .entities import ExtractorConfig, GazetteerExtractor, merge_entities
 from .evaluation import evaluate
-from .fusion import fuse_associations_by_vote
+from .fusion import augment_associations_by_vote, fuse_associations_by_vote
 from .io import read_jsonl, validate_submission, write_jsonl
 from .llm import BigModelClient
 from .llm_entities import (
@@ -32,6 +32,7 @@ __all__ = [
     "associate_joint_with_llm",
     "associate_patient_structured_with_llm",
     "associate_with_llm",
+    "augment_associations_by_vote",
     "cnn_additions",
     "discover_entities_article_with_llm",
     "discover_entities_with_llm",
