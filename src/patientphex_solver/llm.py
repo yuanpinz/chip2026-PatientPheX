@@ -187,7 +187,11 @@ class BigModelClient:
                 if not isinstance(text, str) or not text.strip():
                     raise RuntimeError(f"model returned no text: {body}")
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
-                temporary = cache_path.with_suffix(".tmp")
+                # Separate writers must not share a temporary path when model
+                # experiments run concurrently with the same cache key.
+                temporary = cache_path.with_name(
+                    f".{cache_path.name}.{os.getpid()}.{time.time_ns()}.tmp"
+                )
                 temporary.write_text(
                     json.dumps(
                         {"model": self.model, "text": text},
