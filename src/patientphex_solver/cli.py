@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from .abbreviations import discover_abbreviation_entities
@@ -19,7 +20,12 @@ from .association_judge import (
     associate_values_joint_calibrated_with_llm,
     build_association_calibration_examples,
 )
-from .cnn_fusion import CnnFusionConfig, fuse_cnn_entities
+from .cnn_fusion import (
+    CnnFusionConfig,
+    build_surface_precision,
+    cnn_additions,
+    fuse_cnn_entities,
+)
 from .entities import (
     ExtractorConfig,
     GazetteerExtractor,
@@ -382,16 +388,68 @@ def _cmd_augment_associations(args: argparse.Namespace) -> None:
 
 def _cmd_fuse_cnn_entities(args: argparse.Namespace) -> None:
     base_rows = read_jsonl(args.base)
+    cnn_rows = read_jsonl(args.cnn)
+    config = CnnFusionConfig(
+        min_score=args.min_score,
+        min_text_length=args.min_text_length,
+        max_per_identifier=args.max_per_identifier,
+        avoid_existing_overlap=not args.allow_overlap,
+        new_identifiers_only=args.new_identifiers_only,
+        surface_min_precision=args.surface_min_precision,
+        surface_min_count=args.surface_min_count,
+    )
+    surface_precision_by_document = None
+    if args.surface_gold:
+        gold_rows = read_jsonl(args.surface_gold)
+        calibration_config = config
+        if args.surface_calibration_max_per_identifier is not None:
+            calibration_config = replace(
+                config,
+                max_per_identifier=args.surface_calibration_max_per_identifier,
+            )
+        cnn_by_id = {str(row["pmc_id"]): row for row in cnn_rows}
+        calibration_rows = []
+        for base in base_rows:
+            pmc_id = str(base["pmc_id"])
+            cnn = cnn_by_id.get(pmc_id)
+            if cnn is None:
+                raise ValueError(f"missing CNN row for PMC {pmc_id}")
+            additions = cnn_additions(
+                list(base.get("entities", [])),
+                list(cnn.get("entities", [])),
+                calibration_config,
+            )
+            calibration_rows.append(
+                {
+                    "pmc_id": base["pmc_id"],
+                    "entities": additions,
+                    "association": [],
+                }
+            )
+        if args.surface_leave_one_out:
+            surface_precision_by_document = {
+                str(base["pmc_id"]): build_surface_precision(
+                    calibration_rows,
+                    gold_rows,
+                    min_count=args.surface_min_count,
+                    exclude_pmc_id=str(base["pmc_id"]),
+                )
+                for base in base_rows
+            }
+        else:
+            surface_precision = build_surface_precision(
+                calibration_rows,
+                gold_rows,
+                min_count=args.surface_min_count,
+            )
+            surface_precision_by_document = {
+                str(base["pmc_id"]): surface_precision for base in base_rows
+            }
     predictions = fuse_cnn_entities(
         base_rows,
-        read_jsonl(args.cnn),
-        CnnFusionConfig(
-            min_score=args.min_score,
-            min_text_length=args.min_text_length,
-            max_per_identifier=args.max_per_identifier,
-            avoid_existing_overlap=not args.allow_overlap,
-            new_identifiers_only=args.new_identifiers_only,
-        ),
+        cnn_rows,
+        config,
+        surface_precision_by_document=surface_precision_by_document,
     )
     write_jsonl(args.output, predictions)
     additions = sum(
@@ -937,6 +995,37 @@ def build_parser() -> argparse.ArgumentParser:
     fuse_cnn.add_argument("--min-score", type=float, default=0.9997)
     fuse_cnn.add_argument("--min-text-length", type=int, default=6)
     fuse_cnn.add_argument("--max-per-identifier", type=int, default=10)
+    fuse_cnn.add_argument(
+        "--surface-gold",
+        default=None,
+        help="optional gold JSONL used to calibrate observed CNN surface precision",
+    )
+    fuse_cnn.add_argument(
+        "--surface-min-precision",
+        type=float,
+        default=0.0,
+        help="minimum calibrated precision for an observed CNN surface",
+    )
+    fuse_cnn.add_argument(
+        "--surface-min-count",
+        type=int,
+        default=1,
+        help="minimum calibration occurrences before a surface receives a precision",
+    )
+    fuse_cnn.add_argument(
+        "--surface-calibration-max-per-identifier",
+        type=int,
+        default=None,
+        help=(
+            "optional per-HPO cap used only while collecting surface calibration "
+            "examples; defaults to --max-per-identifier"
+        ),
+    )
+    fuse_cnn.add_argument(
+        "--surface-leave-one-out",
+        action="store_true",
+        help="exclude each document's own gold labels while calibrating its CNN surfaces",
+    )
     fuse_cnn.add_argument(
         "--allow-overlap",
         action="store_true",

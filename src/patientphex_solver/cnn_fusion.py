@@ -9,9 +9,11 @@ additional calibration.
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Any
+
+from .ontology import normalize_surface
 
 JsonObject = dict[str, Any]
 
@@ -25,6 +27,11 @@ class CnnFusionConfig:
     max_per_identifier: int = 10
     avoid_existing_overlap: bool = True
     new_identifiers_only: bool = False
+    # Optional corpus calibration for CNN-only additions.  A surface is kept
+    # when its held-out training precision is at least this threshold.
+    surface_precision: dict[str, float] | None = None
+    surface_min_precision: float = 0.0
+    surface_min_count: int = 1
 
 
 def _span(entity: JsonObject) -> tuple[int, int]:
@@ -106,6 +113,15 @@ def cnn_additions(
             continue
         if len(str(entity.get("text", ""))) < rules.min_text_length:
             continue
+        if rules.surface_precision is not None:
+            surface = normalize_surface(str(entity.get("text", "")))
+            observed = rules.surface_precision.get(surface)
+            if (
+                observed is not None
+                and rules.surface_min_count > 0
+                and observed < rules.surface_min_precision
+            ):
+                continue
         if key in existing_keys:
             continue
         if rules.avoid_existing_overlap and any(
@@ -128,10 +144,58 @@ def cnn_additions(
     return sorted(additions, key=lambda entity: (_span(entity), str(entity["identifier"])))
 
 
+def build_surface_precision(
+    training_rows: list[JsonObject],
+    gold_rows: list[JsonObject],
+    *,
+    min_count: int = 1,
+    exclude_pmc_id: str | None = None,
+) -> dict[str, float]:
+    """Estimate CNN surface precision without using the target article labels.
+
+    Pass ``exclude_pmc_id`` during leave-one-out evaluation to omit the target
+    article. The returned map contains only surfaces observed at least
+    ``min_count`` times among the CNN candidates.
+    """
+    gold_by_id = {str(row["pmc_id"]): row for row in gold_rows}
+    counts: dict[str, Counter[str]] = defaultdict(Counter)
+    for candidate_row in training_rows:
+        if exclude_pmc_id is not None and str(candidate_row["pmc_id"]) == str(
+            exclude_pmc_id
+        ):
+            continue
+        gold = gold_by_id.get(str(candidate_row["pmc_id"]))
+        if gold is None:
+            continue
+        gold_keys = {
+            (int(entity["offset"]), int(entity["length"]), str(entity["identifier"]))
+            for entity in gold.get("entities", [])
+            if entity.get("note") != "NO"
+        }
+        for entity in candidate_row.get("entities", []):
+            surface = normalize_surface(str(entity.get("text", "")))
+            if not surface:
+                continue
+            key = (
+                int(entity["offset"]),
+                int(entity["length"]),
+                str(entity["identifier"]),
+            )
+            counts[surface]["tp"] += key in gold_keys
+            counts[surface]["total"] += 1
+    return {
+        surface: values["tp"] / values["total"]
+        for surface, values in counts.items()
+        if values["total"] >= min_count
+    }
+
+
 def fuse_cnn_entities(
     base_rows: list[JsonObject],
     cnn_rows: list[JsonObject],
     config: CnnFusionConfig | None = None,
+    *,
+    surface_precision_by_document: dict[str, dict[str, float]] | None = None,
 ) -> list[JsonObject]:
     """Fuse raw CNN entities into rows while preserving associations."""
 
@@ -143,10 +207,22 @@ def fuse_cnn_entities(
         if cnn is None:
             raise ValueError(f"missing CNN row for PMC {pmc_id}")
         base_entities = list(base.get("entities", []))
+        document_config = config or CnnFusionConfig()
+        if surface_precision_by_document is not None:
+            document_config = CnnFusionConfig(
+                min_score=document_config.min_score,
+                min_text_length=document_config.min_text_length,
+                max_per_identifier=document_config.max_per_identifier,
+                avoid_existing_overlap=document_config.avoid_existing_overlap,
+                new_identifiers_only=document_config.new_identifiers_only,
+                surface_precision=surface_precision_by_document.get(pmc_id, {}),
+                surface_min_precision=document_config.surface_min_precision,
+                surface_min_count=document_config.surface_min_count,
+            )
         additions = cnn_additions(
             base_entities,
             list(cnn.get("entities", [])),
-            config,
+            document_config,
         )
         fused.append(
             {

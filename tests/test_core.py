@@ -18,6 +18,7 @@ from patientphex_solver.association_judge import (
 )
 from patientphex_solver.cnn_fusion import (
     CnnFusionConfig,
+    build_surface_precision,
     cnn_additions,
     fuse_cnn_entities,
 )
@@ -182,6 +183,158 @@ def test_cnn_fusion_preserves_association_and_strips_score() -> None:
             "note": None,
         }
     ]
+
+
+def test_surface_precision_is_leave_one_out_safe_and_ignores_negative_gold() -> None:
+    candidates = [
+        {
+            "pmc_id": "first",
+            "entities": [
+                {
+                    "identifier": "HP:1",
+                    "offset": 0,
+                    "length": 6,
+                    "text": "Ataxia",
+                }
+            ],
+        },
+        {
+            "pmc_id": "second",
+            "entities": [
+                {
+                    "identifier": "HP:1",
+                    "offset": 10,
+                    "length": 6,
+                    "text": "ataxia",
+                },
+                {
+                    "identifier": "HP:2",
+                    "offset": 20,
+                    "length": 7,
+                    "text": "Tremors",
+                },
+            ],
+        },
+    ]
+    gold = [
+        {
+            "pmc_id": "first",
+            "entities": [
+                {
+                    "identifier": "HP:1",
+                    "offset": 0,
+                    "length": 6,
+                    "text": "Ataxia",
+                    "note": None,
+                }
+            ],
+        },
+        {
+            "pmc_id": "second",
+            "entities": [
+                {
+                    "identifier": "HP:2",
+                    "offset": 20,
+                    "length": 7,
+                    "text": "Tremors",
+                    "note": "NO",
+                }
+            ],
+        },
+    ]
+
+    assert build_surface_precision(candidates, gold) == {
+        "ataxia": 0.5,
+        "tremors": 0.0,
+    }
+    assert build_surface_precision(candidates, gold, exclude_pmc_id="second") == {
+        "ataxia": 1.0
+    }
+
+
+def test_cnn_additions_filters_observed_low_precision_but_keeps_unobserved() -> None:
+    candidates = [
+        {
+            "identifier": "HP:1",
+            "type": "Phenotype",
+            "offset": 0,
+            "length": 5,
+            "text": "noisy",
+            "note": None,
+            "score": 1.0,
+        },
+        {
+            "identifier": "HP:2",
+            "type": "Phenotype",
+            "offset": 10,
+            "length": 7,
+            "text": "unknown",
+            "note": None,
+            "score": 1.0,
+        },
+    ]
+
+    additions = cnn_additions(
+        [],
+        candidates,
+        CnnFusionConfig(
+            min_text_length=1,
+            surface_precision={"noisy": 0.2},
+            surface_min_precision=0.4,
+        ),
+    )
+
+    assert [entity["text"] for entity in additions] == ["unknown"]
+
+
+def test_cnn_fusion_applies_document_specific_surface_precision() -> None:
+    base = [
+        {"pmc_id": "first", "pmid": "1", "entities": [], "association": []},
+        {"pmc_id": "second", "pmid": "2", "entities": [], "association": []},
+    ]
+    cnn = [
+        {
+            "pmc_id": "first",
+            "entities": [
+                {
+                    "identifier": "HP:1",
+                    "type": "Phenotype",
+                    "offset": 0,
+                    "length": 7,
+                    "text": "finding",
+                    "note": None,
+                    "score": 1.0,
+                }
+            ],
+        },
+        {
+            "pmc_id": "second",
+            "entities": [
+                {
+                    "identifier": "HP:1",
+                    "type": "Phenotype",
+                    "offset": 0,
+                    "length": 7,
+                    "text": "finding",
+                    "note": None,
+                    "score": 1.0,
+                }
+            ],
+        },
+    ]
+
+    fused = fuse_cnn_entities(
+        base,
+        cnn,
+        CnnFusionConfig(surface_min_precision=0.4),
+        surface_precision_by_document={
+            "first": {"finding": 0.2},
+            "second": {"finding": 1.0},
+        },
+    )
+
+    assert fused[0]["entities"] == []
+    assert [entity["identifier"] for entity in fused[1]["entities"]] == ["HP:1"]
 
 
 def test_merge_entities_combines_multiple_sources_and_deduplicates() -> None:

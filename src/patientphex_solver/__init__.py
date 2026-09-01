@@ -9,7 +9,12 @@ from .association import (
     associate_with_llm,
     propagate_explicit_group_associations,
 )
-from .cnn_fusion import CnnFusionConfig, cnn_additions, fuse_cnn_entities
+from .cnn_fusion import (
+    CnnFusionConfig,
+    build_surface_precision,
+    cnn_additions,
+    fuse_cnn_entities,
+)
 from .entities import (
     ExtractorConfig,
     GazetteerExtractor,
@@ -46,6 +51,7 @@ __all__ = [
     "associate_patient_structured_with_llm",
     "associate_with_llm",
     "augment_associations_by_vote",
+    "build_surface_precision",
     "clip_associations_to_entities",
     "cnn_additions",
     "discover_abbreviation_entities",

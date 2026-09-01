@@ -13,7 +13,7 @@ CHIP2026 PatientPheX 的无本地 GPU 混合方案。Python 环境由 `uv` 管�
 ## 方法
 
 - 从训练集表面统计和 HPO 2026-06-23 本体构造离线词典，保留全局 offset、复合 HPO ID 和否定标记。
-- 复用已生成的 PhenoTagger CNN 原始候选，只加入 `score >= 0.9997`、文本长度至少 6、不与现有 span 重叠的候选；每篇文章的同一 HPO ID 最多补充 10 次。
+- 复用已生成的 PhenoTagger CNN 原始候选，只加入 `score >= 0.9997`、文本长度至少 6、不与现有 span 重叠的候选；使用训练集表面精度校准过滤低精度短语，每篇文章的同一 HPO ID 最多补充 10 次。
 - 由 9B API 在 occurrence 层面逐患者选择候选，不允许模型发明实体或 HPO ID。
 - 使用方向性文章结构窗口过滤患者串线：向前 4000 字符、向后 0 字符；显式的 `both/all patients` 句式再做保守传播。
 - 所有 API 响应按完整请求 SHA-256 缓存到 `cache/llm/`，中断后可继续运行。
@@ -46,7 +46,7 @@ uv run patientphex-solver predict \
   --output outputs/pred_a_p05_norecover_base.jsonl
 ```
 
-融合已经生成的 PhenoTagger CNN 原始结果：
+先融合完整的高置信 PhenoTagger CNN 候选，为 API 保留 occurrence 判定输入：
 
 ```bash
 uv run patientphex-solver fuse-cnn-entities \
@@ -57,6 +57,23 @@ uv run patientphex-solver fuse-cnn-entities \
   --max-per-identifier 10 \
   --output outputs/pred_a_p05_norecover_cnn.jsonl \
   --additions-output outputs/pred_a_p05_norecover_cnn_additions.jsonl
+```
+
+再使用训练集表面精度校准生成最终实体。A 集阶段只读取训练集标签，严格留一训练验证时会排除当前文章：
+
+```bash
+uv run patientphex-solver fuse-cnn-entities \
+  --base outputs/pred_a_p05_norecover_base.jsonl \
+  --cnn outputs/phenotagger_cnn_a_raw.jsonl \
+  --surface-gold PatientPheX-V1-A/PatientPheX-train.jsonl \
+  --surface-min-precision 0.4 \
+  --surface-min-count 1 \
+  --surface-calibration-max-per-identifier 1000000 \
+  --min-score 0.9997 \
+  --min-text-length 6 \
+  --max-per-identifier 10 \
+  --output outputs/pred_a_p05_norecover_surface_cnn.jsonl \
+  --additions-output outputs/pred_a_p05_norecover_surface_additions.jsonl
 ```
 
 调用合规 9B 模型完成患者关联：
@@ -80,10 +97,10 @@ uv run patientphex-solver stabilize-associations \
   --data-dir PatientPheX-V1-A \
   --split a \
   --base outputs/pred_a_compliant_e69_occ.jsonl \
-  --entities outputs/pred_a_p05_norecover_cnn.jsonl \
-  --additions outputs/pred_a_p05_norecover_cnn_additions.jsonl \
+  --entities outputs/pred_a_p05_norecover_surface_cnn.jsonl \
+  --additions outputs/pred_a_p05_norecover_surface_additions.jsonl \
   --addition-associations outputs/pred_a_p05_norecover_cnn_additions_e69_occ.jsonl \
-  --output outputs/pred_a_p05_norecover_stabilized.jsonl
+  --output outputs/pred_a_p05_norecover_surface_stabilized.jsonl
 ```
 
 提交前校验：
@@ -91,14 +108,14 @@ uv run patientphex-solver stabilize-associations \
 ```bash
 uv run patientphex-solver validate \
   --expected PatientPheX-V1-A/PatientPheX-A.jsonl \
-  --predicted outputs/pred_a_p05_norecover_stabilized.jsonl
+  --predicted outputs/pred_a_p05_norecover_surface_stabilized.jsonl
 ```
 
-当前改进后的 A 集文件含 20 篇文章、1434 个实体和 474 个患者-表型值。平台未知标签不能用于本地评分，最终成绩以天池返回值为准。
+当前 A 集文件含 20 篇文章、1434 个实体和 474 个患者-表型值。平台未知标签不能用于本地评分，最终成绩以天池返回值为准。
 
 ## 严格留一结果
 
-每篇训练文章的词典候选只使用另外 79 篇文章构造，CNN 阈值和关联窗口均在全部 80 篇上核验，并同时检查前后两个不重叠的 40 篇子集。
+每篇训练文章的词典候选和 CNN 表面校准只使用另外 79 篇文章构造，CNN 阈值和关联窗口均在全部 80 篇上核验，并同时检查前后两个不重叠的 40 篇子集。
 
 | 路线 | Mention F1 | Document F1 | Association micro F1 | Association macro F1 | 总分 |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -106,10 +123,13 @@ uv run patientphex-solver validate \
 | + 高置信 CNN | 0.68053 | 0.76447 | 0.52208 | 0.43888 | 0.60149 |
 | + 9B occurrence 关联 | 0.68053 | 0.76447 | 0.65982 | 0.59490 | 0.67493 |
 | + 新实体候选和稳定关联融合 | 0.68820 | 0.76813 | 0.66422 | 0.59746 | 0.67950 |
+| + 留一表面精度校准 | 0.69071 | 0.77179 | 0.66568 | 0.59869 | 0.68172 |
 
 9B 自动实体补漏的严格留一结果为 `mention F1 0.6783 / document F1 0.7627`，低于不补漏方案，因此正式流程不启用 `discover-entities`。8B 简单投票和联合 occurrence 关联也未在全量留出上改善，未进入最终流程。
 
 稳定关联融合只复用旧版 9B 关联中仍有最终实体支撑的值；新增值必须来自新增 occurrence 的 9B 判定，且 occurrence 位于 `CASE`、`METHODS` 或 `RESULTS` 段，不能被否定或更长候选覆盖。该策略没有读取目标文章标签。
+
+CNN 表面校准按 `(文本表面, 文章)` 的候选 occurrence 统计训练精度，低于 `0.4` 的已观测表面被过滤；未在训练集中观测到的表面不因校准表缺失而自动丢弃。严格留一验证中，校准样本上限设为 `1000000`，最终每个 HPO 的输出上限仍为 `10`。
 
 重现训练集关联评估：
 
