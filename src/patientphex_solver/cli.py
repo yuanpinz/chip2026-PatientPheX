@@ -12,6 +12,7 @@ from .association import (
     associate_joint_with_llm,
     associate_patient_structured_with_llm,
     associate_with_llm,
+    propagate_explicit_group_associations,
 )
 from .association_judge import (
     associate_values_calibrated_with_llm,
@@ -78,6 +79,9 @@ def _predict(
     association_mode: str,
     entity_batch: str,
     client: BigModelClient | None,
+    structure_previous_distance: int = 4000,
+    structure_next_distance: int = 0,
+    propagate_explicit_groups: bool = False,
     progress_path: str | Path | None = None,
 ) -> list[dict]:
     predictions_by_id: dict[str, dict] = {}
@@ -140,7 +144,11 @@ def _predict(
                     associate_joint_structured_with_llm(document, entities, client)
                     if association_mode == "joint-structured"
                     else associate_patient_structured_with_llm(
-                        document, entities, client
+                        document,
+                        entities,
+                        client,
+                        previous_distance=structure_previous_distance,
+                        next_distance=structure_next_distance,
                     )
                     if association_mode == "patient-structured"
                     else associate_joint_with_llm(document, entities, client)
@@ -160,6 +168,10 @@ def _predict(
                             for value in item.get("phenotype", [])
                             if value in proximity_by_id.get(patient_id, set())
                         ]
+                if propagate_explicit_groups:
+                    association = propagate_explicit_group_associations(
+                        document, entities, association
+                    )
             except RuntimeError as exc:
                 print(
                     f"  LLM association failed; using proximity fallback: {exc}",
@@ -213,6 +225,9 @@ def _cmd_predict(args: argparse.Namespace) -> None:
         association_mode=args.association,
         entity_batch=args.entity_batch,
         client=client,
+        structure_previous_distance=args.structure_previous_distance,
+        structure_next_distance=args.structure_next_distance,
+        propagate_explicit_groups=args.propagate_explicit_groups,
         progress_path=str(args.output) + ".progress",
     )
     write_jsonl(args.output, predictions)
@@ -551,27 +566,48 @@ def _cmd_judge_associations(args: argparse.Namespace) -> None:
             f"({len(entities)} entities, {len(document.get('patient', []))} patients)",
             flush=True,
         )
-        association = (
-            associate_values_joint_calibrated_with_llm
-            if args.joint
-            else associate_values_calibrated_with_llm
-        )(
-            document,
-            entities,
-            ontology,
-            client,
-            calibration,
-            batch_size=args.batch_size,
-            calibration_per_label=args.calibration_per_label,
-            include_uncertain=args.include_uncertain,
-            exclude_calibration_pmc_id=pmc_id if args.split == "train" else None,
-            structure_multi_patient=not args.no_structure_filter,
-            max_tokens=(
-                args.max_tokens
-                if args.max_tokens is not None
-                else (1500 if args.joint else 1200)
-            ),
-        )
+        if args.occurrence_level:
+            occurrence_associator = (
+                associate_joint_structured_with_llm
+                if args.joint
+                else associate_patient_structured_with_llm
+            )
+            association = occurrence_associator(
+                document,
+                entities,
+                client,
+                previous_distance=args.structure_previous_distance,
+                next_distance=args.structure_next_distance,
+                structure_filter=not args.no_structure_filter,
+            )
+        else:
+            association = (
+                associate_values_joint_calibrated_with_llm
+                if args.joint
+                else associate_values_calibrated_with_llm
+            )(
+                document,
+                entities,
+                ontology,
+                client,
+                calibration,
+                batch_size=args.batch_size,
+                calibration_per_label=args.calibration_per_label,
+                include_uncertain=args.include_uncertain,
+                exclude_calibration_pmc_id=pmc_id if args.split == "train" else None,
+                structure_multi_patient=not args.no_structure_filter,
+                previous_distance=args.structure_previous_distance,
+                next_distance=args.structure_next_distance,
+                max_tokens=(
+                    args.max_tokens
+                    if args.max_tokens is not None
+                    else (1500 if args.joint else 1200)
+                ),
+            )
+        if args.propagate_explicit_groups:
+            association = propagate_explicit_group_associations(
+                document, entities, association
+            )
         predictions.append(
             {
                 "pmc_id": document["pmc_id"],
@@ -674,10 +710,13 @@ def build_parser() -> argparse.ArgumentParser:
             "joint-intersection",
             "patient-direct",
         ],
-        default="joint-structured",
+        default="patient-structured",
     )
-    predict.add_argument("--model", default="modelK5")
+    predict.add_argument("--model", default="modelE6-9-local")
     predict.add_argument("--cache-dir", default="cache/llm")
+    predict.add_argument("--structure-previous-distance", type=int, default=4000)
+    predict.add_argument("--structure-next-distance", type=int, default=0)
+    predict.add_argument("--propagate-explicit-groups", action="store_true")
     predict.set_defaults(func=_cmd_predict)
 
     scoring = subparsers.add_parser(
@@ -895,7 +934,7 @@ def build_parser() -> argparse.ArgumentParser:
     judge.add_argument("--split", choices=["a", "train"], default="a")
     judge.add_argument("--candidates", required=True)
     judge.add_argument("--output", required=True)
-    judge.add_argument("--model", default="modelH")
+    judge.add_argument("--model", default="modelE6-9-local")
     judge.add_argument("--cache-dir", default="cache/llm")
     judge.add_argument("--batch-size", type=int, default=40)
     judge.add_argument("--calibration-per-label", type=int, default=10)
@@ -916,13 +955,26 @@ def build_parser() -> argparse.ArgumentParser:
     judge_associations.add_argument("--split", choices=["a", "train"], default="a")
     judge_associations.add_argument("--candidates", required=True)
     judge_associations.add_argument("--output", required=True)
-    judge_associations.add_argument("--model", default="modelS5_6S")
+    judge_associations.add_argument("--model", default="modelE6-9-local")
     judge_associations.add_argument("--cache-dir", default="cache/llm")
     judge_associations.add_argument("--batch-size", type=int, default=30)
     judge_associations.add_argument("--calibration-per-label", type=int, default=8)
     judge_associations.add_argument("--include-uncertain", action="store_true")
     judge_associations.add_argument("--no-structure-filter", action="store_true")
     judge_associations.add_argument("--joint", action="store_true")
+    judge_associations.add_argument(
+        "--occurrence-level",
+        action="store_true",
+        help=(
+            "select entity occurrences instead of grouping candidates by HPO "
+            "value; combine with --joint to assign all patients together"
+        ),
+    )
+    judge_associations.add_argument(
+        "--structure-previous-distance", type=int, default=4000
+    )
+    judge_associations.add_argument("--structure-next-distance", type=int, default=0)
+    judge_associations.add_argument("--propagate-explicit-groups", action="store_true")
     judge_associations.add_argument(
         "--max-tokens",
         type=int,
@@ -940,7 +992,7 @@ def build_parser() -> argparse.ArgumentParser:
     discover.add_argument("--split", choices=["a", "train"], default="a")
     discover.add_argument("--candidates", required=True)
     discover.add_argument("--output", required=True)
-    discover.add_argument("--model", default="modelS5_6S")
+    discover.add_argument("--model", default="modelE6-9-local")
     discover.add_argument("--cache-dir", default="cache/llm")
     discover.add_argument("--max-chars", type=int, default=6500)
     discover.add_argument("--max-examples", type=int, default=5)

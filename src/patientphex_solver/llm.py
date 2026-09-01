@@ -13,7 +13,9 @@ import httpx
 DEFAULT_ENDPOINT = (
     "https://test.huihaohealth.com/ai-center/x/server/api/v1/big_model/chat"
 )
-DEFAULT_MODEL = "modelK5"
+# Qwen3.5-9B is the strongest model in the supplied API guide that stays
+# within the competition's 10B-parameter limit.
+DEFAULT_MODEL = "modelE6-9-local"
 _FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.IGNORECASE | re.DOTALL)
 _INDEX_LIST_RE = re.compile(r'"entity_indices"\s*:\s*\[([^]]*)', re.DOTALL)
 _ASSIGNMENT_ENTRY_RE = re.compile(r'"([^"\\]+)"\s*:\s*\[([^]]*)', re.DOTALL)

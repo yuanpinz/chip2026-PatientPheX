@@ -404,19 +404,24 @@ def associate_patient_structured_with_llm(
     document: JsonObject,
     entities: list[JsonObject],
     client: BigModelClient,
+    *,
+    previous_distance: int = 4000,
+    next_distance: int = 0,
+    structure_filter: bool = True,
 ) -> list[JsonObject]:
     """Use per-patient LLM selections constrained at occurrence level."""
     patient_ids = [str(patient["patient_id"]) for patient in document.get("patient", [])]
     positive_entities, selected = _patient_entity_indices(document, entities, client)
     if not positive_entities:
         return [{"patient_id": patient_id, "phenotype": []} for patient_id in patient_ids]
-    selected = _filter_selected_indices_by_structure(
-        document,
-        positive_entities,
-        selected,
-        previous_distance=3000,
-        next_distance=500,
-    )
+    if structure_filter:
+        selected = _filter_selected_indices_by_structure(
+            document,
+            positive_entities,
+            selected,
+            previous_distance=previous_distance,
+            next_distance=next_distance,
+        )
     return _associations_from_indices(patient_ids, positive_entities, selected)
 
 
@@ -697,17 +702,24 @@ def associate_joint_structured_with_llm(
     document: JsonObject,
     entities: list[JsonObject],
     client: BigModelClient,
+    *,
+    previous_distance: int = 4000,
+    next_distance: int = 0,
+    structure_filter: bool = True,
 ) -> list[JsonObject]:
     """Use joint LLM assignments constrained by patient-local article structure."""
     patient_ids = [str(patient["patient_id"]) for patient in document.get("patient", [])]
     positive_entities, selected = _joint_entity_indices(document, entities, client)
     if not positive_entities:
         return [{"patient_id": patient_id, "phenotype": []} for patient_id in patient_ids]
-    selected = _filter_selected_indices_by_structure(
-        document,
-        positive_entities,
-        selected,
-    )
+    if structure_filter:
+        selected = _filter_selected_indices_by_structure(
+            document,
+            positive_entities,
+            selected,
+            previous_distance=previous_distance,
+            next_distance=next_distance,
+        )
     return _associations_from_indices(patient_ids, positive_entities, selected)
 
 

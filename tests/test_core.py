@@ -7,6 +7,7 @@ import pytest
 from patientphex_solver.abbreviations import discover_abbreviation_entities
 from patientphex_solver.association import (
     _filter_selected_indices_by_structure,
+    associate_patient_structured_with_llm,
     filter_associations_by_structure,
     propagate_explicit_group_associations,
 )
@@ -420,6 +421,62 @@ is_a: HP:0000118 ! root
         calibration,
     )
     assert association == [{"patient_id": "P1", "phenotype": ["HP:0001250"]}]
+
+
+def test_patient_structured_association_exposes_directional_structure_window() -> None:
+    document = {
+        "pmc_id": "target",
+        "patient": [
+            {"patient_id": "P1", "mention": [{"offset": 0, "length": 2}]},
+            {"patient_id": "P2", "mention": [{"offset": 40, "length": 2}]},
+        ],
+        "full_text": [
+            {"offset": 0, "section_type": "CASE", "text": "P1"},
+            {"offset": 20, "section_type": "CASE", "text": "seizure."},
+            {"offset": 40, "section_type": "CASE", "text": "P2"},
+        ],
+    }
+    entity = {
+        "identifier": "HP:0001250",
+        "type": "Phenotype",
+        "offset": 20,
+        "length": 7,
+        "text": "seizure",
+        "note": None,
+    }
+
+    class FakeClient:
+        def chat_json(self, messages, *, max_tokens=8000):
+            return {"entity_indices": [0]}
+
+    assert associate_patient_structured_with_llm(
+        document,
+        [entity],
+        FakeClient(),
+        previous_distance=100,
+        next_distance=0,
+    ) == [{"patient_id": "P1", "phenotype": ["HP:0001250"]}, {"patient_id": "P2", "phenotype": []}]
+
+    assert associate_patient_structured_with_llm(
+        document,
+        [entity],
+        FakeClient(),
+        previous_distance=100,
+        next_distance=100,
+    ) == [
+        {"patient_id": "P1", "phenotype": ["HP:0001250"]},
+        {"patient_id": "P2", "phenotype": ["HP:0001250"]},
+    ]
+
+    assert associate_patient_structured_with_llm(
+        document,
+        [entity],
+        FakeClient(),
+        structure_filter=False,
+    ) == [
+        {"patient_id": "P1", "phenotype": ["HP:0001250"]},
+        {"patient_id": "P2", "phenotype": ["HP:0001250"]},
+    ]
 
 
 def test_fewshot_entity_discovery_keeps_exact_span_and_id(tmp_path) -> None:
