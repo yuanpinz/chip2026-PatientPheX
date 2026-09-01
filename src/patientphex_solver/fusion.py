@@ -132,6 +132,10 @@ def stabilize_associations(
     reject_negated: bool = True,
     reject_nested: bool = True,
     new_values_only: bool = True,
+    final_structure_filter: bool = False,
+    structure_previous_distance: int = 4000,
+    structure_next_distance: int = 300,
+    preserve_explicit_groups: bool = False,
 ) -> list[JsonObject]:
     """Reuse stable associations while adding API decisions for new entities.
 
@@ -139,7 +143,10 @@ def stabilize_associations(
     final entity set comes from ``entity_rows``; old associations are clipped
     to that set before additions are considered. Additions are accepted only
     from selected article sections and are matched at occurrence level by the
-    API output in ``addition_association_rows``.
+    API output in ``addition_association_rows``. When ``final_structure_filter``
+    is enabled, multi-patient associations are also clipped to values with a
+    patient-local supporting occurrence in the final entity set. Explicit group
+    statements can optionally restore only values selected before filtering.
     """
     selected_sections = {
         value.upper() for value in (sections or {"CASE", "METHODS", "RESULTS"})
@@ -211,6 +218,37 @@ def stabilize_associations(
                     ):
                         values.append(value)
             associations.append({"patient_id": patient_id, "phenotype": values})
+
+        if final_structure_filter and len(document.get("patient", [])) > 1:
+            unfiltered_associations = associations
+            associations = filter_associations_by_structure(
+                document,
+                final_entities,
+                associations,
+                previous_distance=structure_previous_distance,
+                next_distance=structure_next_distance,
+            )
+            if preserve_explicit_groups:
+                original_values = _association_sets(
+                    {"association": unfiltered_associations}
+                )
+                grouped = propagate_explicit_group_associations(
+                    document,
+                    final_entities,
+                    associations,
+                )
+                associations = [
+                    {
+                        "patient_id": item["patient_id"],
+                        "phenotype": [
+                            value
+                            for value in item.get("phenotype", [])
+                            if value
+                            in original_values.get(str(item["patient_id"]), set())
+                        ],
+                    }
+                    for item in grouped
+                ]
 
         predictions.append(
             {

@@ -100,7 +100,11 @@ uv run patientphex-solver stabilize-associations \
   --entities outputs/pred_a_p05_norecover_surface_cnn.jsonl \
   --additions outputs/pred_a_p05_norecover_surface_additions.jsonl \
   --addition-associations outputs/pred_a_p05_norecover_cnn_additions_e69_occ.jsonl \
-  --output outputs/pred_a_p05_norecover_surface_stabilized.jsonl
+  --final-structure-filter \
+  --structure-previous-distance 4000 \
+  --structure-next-distance 300 \
+  --preserve-explicit-groups \
+  --output outputs/pred_a_p05_norecover_surface_structured_stabilized.jsonl
 ```
 
 提交前校验：
@@ -108,10 +112,10 @@ uv run patientphex-solver stabilize-associations \
 ```bash
 uv run patientphex-solver validate \
   --expected PatientPheX-V1-A/PatientPheX-A.jsonl \
-  --predicted outputs/pred_a_p05_norecover_surface_stabilized.jsonl
+  --predicted outputs/pred_a_p05_norecover_surface_structured_stabilized.jsonl
 ```
 
-当前 A 集文件含 20 篇文章、1434 个实体和 474 个患者-表型值。平台未知标签不能用于本地评分，最终成绩以天池返回值为准。
+当前 A 集文件含 20 篇文章、1434 个实体和 469 个患者-表型值。平台未知标签不能用于本地评分，最终成绩以天池返回值为准。
 
 ## 严格留一结果
 
@@ -124,10 +128,11 @@ uv run patientphex-solver validate \
 | + 9B occurrence 关联 | 0.68053 | 0.76447 | 0.65982 | 0.59490 | 0.67493 |
 | + 新实体候选和稳定关联融合 | 0.68820 | 0.76813 | 0.66422 | 0.59746 | 0.67950 |
 | + 留一表面精度校准 | 0.69071 | 0.77179 | 0.66568 | 0.59869 | 0.68172 |
+| + 多患者最终结构过滤 | 0.69071 | 0.77179 | 0.66782 | 0.59986 | 0.68254 |
 
 9B 自动实体补漏的严格留一结果为 `mention F1 0.6783 / document F1 0.7627`，低于不补漏方案，因此正式流程不启用 `discover-entities`。8B 简单投票和联合 occurrence 关联也未在全量留出上改善，未进入最终流程。
 
-稳定关联融合只复用旧版 9B 关联中仍有最终实体支撑的值；新增值必须来自新增 occurrence 的 9B 判定，且 occurrence 位于 `CASE`、`METHODS` 或 `RESULTS` 段，不能被否定或更长候选覆盖。该策略没有读取目标文章标签。
+稳定关联融合只复用旧版 9B 关联中仍有最终实体支撑的值；新增值必须来自新增 occurrence 的 9B 判定，且 occurrence 位于 `CASE`、`METHODS` 或 `RESULTS` 段，不能被否定或更长候选覆盖。最终结构过滤进一步约束多患者文章中的关联必须有患者局部实体 occurrence 支撑，同时保留过滤前已由 9B 选中且由明确群组语义支持的值。该策略没有读取目标文章标签。
 
 CNN 表面校准按 `(文本表面, 文章)` 的候选 occurrence 统计训练精度，低于 `0.4` 的已观测表面被过滤；未在训练集中观测到的表面不因校准表缺失而自动丢弃。严格留一验证中，校准样本上限设为 `1000000`，最终每个 HPO 的输出上限仍为 `10`。
 

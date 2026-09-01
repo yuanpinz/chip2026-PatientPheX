@@ -554,6 +554,10 @@ def _cmd_stabilize_associations(args: argparse.Namespace) -> None:
         reject_negated=not args.allow_negated,
         reject_nested=not args.allow_nested,
         new_values_only=not args.allow_existing_values,
+        final_structure_filter=args.final_structure_filter,
+        structure_previous_distance=args.structure_previous_distance,
+        structure_next_distance=args.structure_next_distance,
+        preserve_explicit_groups=args.preserve_explicit_groups,
     )
     errors = validate_submission(predictions, documents)
     if errors:
@@ -1114,6 +1118,28 @@ def build_parser() -> argparse.ArgumentParser:
     stabilize.add_argument("--allow-negated", action="store_true")
     stabilize.add_argument("--allow-nested", action="store_true")
     stabilize.add_argument("--allow-existing-values", action="store_true")
+    stabilize.add_argument(
+        "--final-structure-filter",
+        action="store_true",
+        help="for multi-patient articles, retain only patient-local final associations",
+    )
+    stabilize.add_argument(
+        "--structure-previous-distance",
+        type=int,
+        default=4000,
+        help="patient-anchor window before an entity for the final structure filter",
+    )
+    stabilize.add_argument(
+        "--structure-next-distance",
+        type=int,
+        default=300,
+        help="patient-anchor window after an entity for the final structure filter",
+    )
+    stabilize.add_argument(
+        "--preserve-explicit-groups",
+        action="store_true",
+        help="restore pre-filter values supported by explicit multi-patient statements",
+    )
     stabilize.add_argument("--output", required=True)
     stabilize.set_defaults(func=_cmd_stabilize_associations)
 

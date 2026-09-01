@@ -1005,6 +1005,113 @@ def test_stabilize_associations_clips_old_and_filters_new_occurrences() -> None:
     assert result[0]["association"] == [{"patient_id": "P1", "phenotype": ["HP:NEW"]}]
 
 
+def test_stabilize_final_structure_filter_removes_cross_patient_values() -> None:
+    document = {
+        "pmc_id": "stable-multi",
+        "pmid": "1",
+        "patient": [
+            {"patient_id": "P1", "mention": [{"offset": 0, "length": 2, "text": "P1"}]},
+            {"patient_id": "P2", "mention": [{"offset": 18, "length": 2, "text": "P2"}]},
+        ],
+        "full_text": [
+            {
+                "section_type": "CASE",
+                "offset": 0,
+                "text": "P1 had seizures. P2 had ataxia.",
+            }
+        ],
+    }
+    base = [{
+        "pmc_id": "stable-multi",
+        "pmid": "1",
+        "entities": [],
+        "association": [
+            {"patient_id": "P1", "phenotype": ["HP:SEIZURE", "HP:ATAXIA"]},
+            {"patient_id": "P2", "phenotype": ["HP:SEIZURE", "HP:ATAXIA"]},
+        ],
+    }]
+    entities = [{
+        "pmc_id": "stable-multi",
+        "pmid": "1",
+        "entities": [
+            {"identifier": "HP:SEIZURE", "offset": 7, "length": 8, "text": "seizures", "note": None},
+            {"identifier": "HP:ATAXIA", "offset": 25, "length": 6, "text": "ataxia", "note": None},
+        ],
+    }]
+    empty_additions = [{"pmc_id": "stable-multi", "entities": []}]
+    empty_associations = [{"pmc_id": "stable-multi", "association": []}]
+
+    result = stabilize_associations(
+        [document],
+        base,
+        entities,
+        empty_additions,
+        empty_associations,
+        final_structure_filter=True,
+        structure_previous_distance=4000,
+        structure_next_distance=300,
+    )
+
+    assert result[0]["association"] == [
+        {"patient_id": "P1", "phenotype": ["HP:SEIZURE"]},
+        {"patient_id": "P2", "phenotype": ["HP:ATAXIA"]},
+    ]
+
+
+def test_stabilize_structure_filter_preserves_preselected_explicit_groups() -> None:
+    document = {
+        "pmc_id": "stable-group",
+        "pmid": "1",
+        "patient": [
+            {"patient_id": "P1", "mention": [{"offset": 0, "length": 2, "text": "P1"}]},
+            {"patient_id": "P2", "mention": [{"offset": 7, "length": 2, "text": "P2"}]},
+        ],
+        "full_text": [
+            {
+                "section_type": "CASE",
+                "offset": 0,
+                "text": "P1 and P2 were assessed. They both had seizures.",
+            }
+        ],
+    }
+    start = document["full_text"][0]["text"].index("seizures")
+    base = [{
+        "pmc_id": "stable-group",
+        "pmid": "1",
+        "entities": [],
+        "association": [
+            {"patient_id": "P1", "phenotype": ["HP:SEIZURE"]},
+            {"patient_id": "P2", "phenotype": ["HP:SEIZURE"]},
+        ],
+    }]
+    entities = [{
+        "pmc_id": "stable-group",
+        "pmid": "1",
+        "entities": [
+            {"identifier": "HP:SEIZURE", "offset": start, "length": 8, "text": "seizures", "note": None},
+        ],
+    }]
+    empty_additions = [{"pmc_id": "stable-group", "entities": []}]
+    empty_associations = [{"pmc_id": "stable-group", "association": []}]
+
+    result = stabilize_associations(
+        [document],
+        base,
+        entities,
+        empty_additions,
+        empty_associations,
+        final_structure_filter=True,
+        structure_previous_distance=1,
+        structure_next_distance=0,
+        preserve_explicit_groups=True,
+    )
+
+    assert result[0]["association"] == [
+        {"patient_id": "P1", "phenotype": ["HP:SEIZURE"]},
+        {"patient_id": "P2", "phenotype": ["HP:SEIZURE"]},
+    ]
+
+
 def test_fusion_can_union_multi_patient_sources() -> None:
     document = {
         "pmc_id": "multi",
