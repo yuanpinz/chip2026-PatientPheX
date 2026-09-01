@@ -34,26 +34,29 @@ export PATIENTPHEX_API_ENDPOINT='https://test.huihaohealth.com/ai-center/x/serve
 
 ## A 集流程
 
-先生成不调用模型的词典基线：
+先生成不调用模型的词典基线。`0.5` 的训练表面精度阈值和关闭 exact alias recovery 是当前严格留一验证过的实体配置：
 
 ```bash
 uv run patientphex-solver predict \
   --data-dir PatientPheX-V1-A \
   --split a \
+  --train-min-precision 0.5 \
+  --no-recover-exact-train-aliases \
   --association proximity \
-  --output outputs/pred_a_compliant_base.jsonl
+  --output outputs/pred_a_p05_norecover_base.jsonl
 ```
 
 融合已经生成的 PhenoTagger CNN 原始结果：
 
 ```bash
 uv run patientphex-solver fuse-cnn-entities \
-  --base outputs/pred_a_compliant_base.jsonl \
+  --base outputs/pred_a_p05_norecover_base.jsonl \
   --cnn outputs/phenotagger_cnn_a_raw.jsonl \
   --min-score 0.9997 \
   --min-text-length 6 \
   --max-per-identifier 10 \
-  --output outputs/pred_a_compliant_cnn.jsonl
+  --output outputs/pred_a_p05_norecover_cnn.jsonl \
+  --additions-output outputs/pred_a_p05_norecover_cnn_additions.jsonl
 ```
 
 调用合规 9B 模型完成患者关联：
@@ -62,13 +65,25 @@ uv run patientphex-solver fuse-cnn-entities \
 uv run patientphex-solver judge-associations \
   --data-dir PatientPheX-V1-A \
   --split a \
-  --candidates outputs/pred_a_compliant_cnn.jsonl \
+  --candidates outputs/pred_a_p05_norecover_cnn_additions.jsonl \
   --occurrence-level \
   --model modelE6-9-local \
   --structure-previous-distance 4000 \
   --structure-next-distance 0 \
   --propagate-explicit-groups \
-  --output outputs/pred_a_compliant_e69_occ.jsonl
+  --output outputs/pred_a_p05_norecover_cnn_additions_e69_occ.jsonl
+
+复用已经完成的稳定关联，只对新增 occurrence 接受 API 的患者判断，并过滤病例段之外、否定句和嵌套短候选：
+
+```bash
+uv run patientphex-solver stabilize-associations \
+  --data-dir PatientPheX-V1-A \
+  --split a \
+  --base outputs/pred_a_compliant_e69_occ.jsonl \
+  --entities outputs/pred_a_p05_norecover_cnn.jsonl \
+  --additions outputs/pred_a_p05_norecover_cnn_additions.jsonl \
+  --addition-associations outputs/pred_a_p05_norecover_cnn_additions_e69_occ.jsonl \
+  --output outputs/pred_a_p05_norecover_stabilized.jsonl
 ```
 
 提交前校验：
@@ -76,10 +91,10 @@ uv run patientphex-solver judge-associations \
 ```bash
 uv run patientphex-solver validate \
   --expected PatientPheX-V1-A/PatientPheX-A.jsonl \
-  --predicted outputs/pred_a_compliant_e69_occ.jsonl
+  --predicted outputs/pred_a_p05_norecover_stabilized.jsonl
 ```
 
-当前 A 集文件含 20 篇文章、1487 个实体、53 个患者和 478 个患者-表型值。平台未知标签不能用于本地评分，最终成绩以天池返回值为准。
+当前改进后的 A 集文件含 20 篇文章、1434 个实体和 474 个患者-表型值。平台未知标签不能用于本地评分，最终成绩以天池返回值为准。
 
 ## 严格留一结果
 
@@ -90,8 +105,11 @@ uv run patientphex-solver validate \
 | 严格留一词典 | 0.65590 | 0.72560 | 0.52208 | 0.43888 | 0.58561 |
 | + 高置信 CNN | 0.68053 | 0.76447 | 0.52208 | 0.43888 | 0.60149 |
 | + 9B occurrence 关联 | 0.68053 | 0.76447 | 0.65982 | 0.59490 | 0.67493 |
+| + 新实体候选和稳定关联融合 | 0.68820 | 0.76813 | 0.66422 | 0.59746 | 0.67950 |
 
 9B 自动实体补漏的严格留一结果为 `mention F1 0.6783 / document F1 0.7627`，低于不补漏方案，因此正式流程不启用 `discover-entities`。8B 简单投票和联合 occurrence 关联也未在全量留出上改善，未进入最终流程。
+
+稳定关联融合只复用旧版 9B 关联中仍有最终实体支撑的值；新增值必须来自新增 occurrence 的 9B 判定，且 occurrence 位于 `CASE`、`METHODS` 或 `RESULTS` 段，不能被否定或更长候选覆盖。该策略没有读取目标文章标签。
 
 重现训练集关联评估：
 

@@ -35,6 +35,7 @@ from .fusion import (
     clip_associations_to_entities,
     fuse_associations_by_patient_count,
     fuse_associations_by_vote,
+    stabilize_associations,
 )
 from .io import read_jsonl, validate_submission, write_jsonl
 from .llm import BigModelClient
@@ -60,14 +61,32 @@ def _build_extractor(
     data_dir: str | Path,
     train: list[dict],
     phenotagger_dictionary: str | None = None,
+    *,
+    train_min_precision: float = 0.40,
+    recover_exact_train_aliases: bool = True,
+    include_hpo_synonyms: bool = True,
 ) -> tuple[HpoOntology, GazetteerExtractor]:
     ontology = HpoOntology.from_obo(Path(data_dir) / "hp.obo")
     extractor = GazetteerExtractor(
         ontology,
         train,
-        ExtractorConfig(phenotagger_dictionary=phenotagger_dictionary),
+        ExtractorConfig(
+            train_min_precision=train_min_precision,
+            recover_exact_train_aliases=recover_exact_train_aliases,
+            include_hpo_synonyms=include_hpo_synonyms,
+            phenotagger_dictionary=phenotagger_dictionary,
+        ),
     )
     return ontology, extractor
+
+
+def _extractor_config(args: argparse.Namespace) -> ExtractorConfig:
+    return ExtractorConfig(
+        train_min_precision=args.train_min_precision,
+        recover_exact_train_aliases=not args.no_recover_exact_train_aliases,
+        include_hpo_synonyms=not args.no_hpo_synonyms,
+        phenotagger_dictionary=args.phenotagger_dictionary,
+    )
 
 
 def _predict(
@@ -79,6 +98,7 @@ def _predict(
     association_mode: str,
     entity_batch: str,
     client: BigModelClient | None,
+    extractors_by_document: dict[str, GazetteerExtractor] | None = None,
     structure_previous_distance: int = 4000,
     structure_next_distance: int = 0,
     propagate_explicit_groups: bool = False,
@@ -97,7 +117,12 @@ def _predict(
             )
             continue
         print(f"[{index}/{len(documents)}] {document['pmc_id']}", flush=True)
-        entities = extractor.extract_document(document)
+        document_extractor = (
+            extractors_by_document.get(str(document["pmc_id"]), extractor)
+            if extractors_by_document is not None
+            else extractor
+        )
+        entities = document_extractor.extract_document(document)
         direct_association = None
         if association_mode == "patient-direct":
             if client is None:
@@ -201,7 +226,27 @@ def _cmd_predict(args: argparse.Namespace) -> None:
         args.data_dir,
         train,
         args.phenotagger_dictionary,
+        train_min_precision=args.train_min_precision,
+        recover_exact_train_aliases=not args.no_recover_exact_train_aliases,
+        include_hpo_synonyms=not args.no_hpo_synonyms,
     )
+    extractors_by_document = None
+    if args.leave_one_out:
+        if args.split != "train":
+            raise SystemExit("--leave-one-out requires --split train")
+        config = _extractor_config(args)
+        extractors_by_document = {
+            str(document["pmc_id"]): GazetteerExtractor(
+                ontology,
+                [
+                    other
+                    for other in train
+                    if str(other["pmc_id"]) != str(document["pmc_id"])
+                ],
+                config,
+            )
+            for document in documents
+        }
     client = (
         BigModelClient(model=args.model, cache_dir=args.cache_dir)
         if args.use_llm
@@ -225,6 +270,7 @@ def _cmd_predict(args: argparse.Namespace) -> None:
         association_mode=args.association,
         entity_batch=args.entity_batch,
         client=client,
+        extractors_by_document=extractors_by_document,
         structure_previous_distance=args.structure_previous_distance,
         structure_next_distance=args.structure_next_distance,
         propagate_explicit_groups=args.propagate_explicit_groups,
@@ -428,6 +474,32 @@ def _cmd_subtract_entities(args: argparse.Namespace) -> None:
 
 def _cmd_clip_associations(args: argparse.Namespace) -> None:
     predictions = clip_associations_to_entities(read_jsonl(args.input))
+    write_jsonl(args.output, predictions)
+    total = sum(
+        len(item.get("phenotype", []))
+        for row in predictions
+        for item in row.get("association", [])
+    )
+    print(f"wrote {args.output} ({len(predictions)} documents, {total} associations)")
+
+
+def _cmd_stabilize_associations(args: argparse.Namespace) -> None:
+    train_path, test_path, _ = _paths(args)
+    documents = read_jsonl(test_path if args.split == "a" else train_path)
+    predictions = stabilize_associations(
+        documents,
+        read_jsonl(args.base),
+        read_jsonl(args.entities),
+        read_jsonl(args.additions),
+        read_jsonl(args.addition_associations),
+        sections={value.upper() for value in args.sections},
+        reject_negated=not args.allow_negated,
+        reject_nested=not args.allow_nested,
+        new_values_only=not args.allow_existing_values,
+    )
+    errors = validate_submission(predictions, documents)
+    if errors:
+        raise SystemExit("submission validation failed:\n" + "\n".join(errors[:30]))
     write_jsonl(args.output, predictions)
     total = sum(
         len(item.get("phenotype", []))
@@ -699,6 +771,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="optional legacy PhenoTagger word_id_map.json",
     )
     predict.add_argument(
+        "--train-min-precision",
+        type=float,
+        default=0.40,
+        help="minimum observed training precision for learned surface aliases",
+    )
+    predict.add_argument(
+        "--no-recover-exact-train-aliases",
+        action="store_true",
+        help="do not recover otherwise filtered exact HPO aliases seen in training",
+    )
+    predict.add_argument(
+        "--no-hpo-synonyms",
+        action="store_true",
+        help="use only preferred HPO names instead of names and synonyms",
+    )
+    predict.add_argument(
+        "--leave-one-out",
+        action="store_true",
+        help="when predicting the train split, exclude each target article from the dictionary",
+    )
+    predict.add_argument(
         "--association",
         choices=[
             "proximity",
@@ -908,6 +1001,32 @@ def build_parser() -> argparse.ArgumentParser:
     clip.add_argument("--input", required=True)
     clip.add_argument("--output", required=True)
     clip.set_defaults(func=_cmd_clip_associations)
+
+    stabilize = subparsers.add_parser(
+        "stabilize-associations",
+        help="reuse stable associations and add filtered decisions for new entities",
+    )
+    stabilize.add_argument("--data-dir", default="PatientPheX-V1-A")
+    stabilize.add_argument("--split", choices=["a", "train"], default="a")
+    stabilize.add_argument("--base", required=True, help="previous calibrated prediction")
+    stabilize.add_argument("--entities", required=True, help="final entity candidates")
+    stabilize.add_argument("--additions", required=True, help="new entity occurrences")
+    stabilize.add_argument(
+        "--addition-associations",
+        required=True,
+        help="API associations generated from the new occurrences",
+    )
+    stabilize.add_argument(
+        "--sections",
+        nargs="+",
+        default=["CASE", "METHODS", "RESULTS"],
+        help="sections in which new associations may be added",
+    )
+    stabilize.add_argument("--allow-negated", action="store_true")
+    stabilize.add_argument("--allow-nested", action="store_true")
+    stabilize.add_argument("--allow-existing-values", action="store_true")
+    stabilize.add_argument("--output", required=True)
+    stabilize.set_defaults(func=_cmd_stabilize_associations)
 
     abbreviation_candidates = subparsers.add_parser(
         "abbreviation-candidates",

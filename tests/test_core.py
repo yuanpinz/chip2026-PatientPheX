@@ -38,6 +38,7 @@ from patientphex_solver.fusion import (
     clip_associations_to_entities,
     fuse_associations_by_patient_count,
     fuse_associations_by_vote,
+    stabilize_associations,
 )
 from patientphex_solver.io import validate_submission
 from patientphex_solver.llm import BigModelClient, parse_json_response
@@ -809,6 +810,46 @@ def test_clip_associations_to_entities_supports_compound_ids_and_unmapped_text()
     assert clipped[0]["association"] == [
         {"patient_id": "P1", "phenotype": ["HP:A", "HP:B", "unmapped finding"]}
     ]
+
+
+def test_stabilize_associations_clips_old_and_filters_new_occurrences() -> None:
+    text = "P1 had old finding. P1 had new finding. P1 had no other finding."
+    new_start = text.index("new finding")
+    neg_start = text.index("other finding")
+    document = {
+        "pmc_id": "stable",
+        "pmid": "1",
+        "patient": [{"patient_id": "P1", "mention": [{"offset": 0, "length": 2, "text": "P1"}]}],
+        "full_text": [{"section_type": "CASE", "offset": 0, "text": text}],
+    }
+    base = [{
+        "pmc_id": "stable",
+        "pmid": "1",
+        "entities": [{"identifier": "HP:OLD", "type": "Phenotype", "offset": 7, "length": 11, "text": "old finding", "note": None}],
+        "association": [{"patient_id": "P1", "phenotype": ["HP:OLD", "HP:GONE"]}],
+    }]
+    final_entities = [{
+        "pmc_id": "stable",
+        "pmid": "1",
+        "entities": [{"identifier": "HP:NEW", "type": "Phenotype", "offset": new_start, "length": 11, "text": "new finding", "note": None}],
+    }]
+    additions = [{
+        "pmc_id": "stable",
+        "entities": [
+            {"identifier": "HP:NEW", "offset": new_start, "length": 11, "text": "new finding", "note": None},
+            {"identifier": "HP:NEG", "offset": neg_start, "length": 12, "text": "other finding", "note": None},
+        ],
+    }]
+    addition_associations = [{
+        "pmc_id": "stable",
+        "association": [{"patient_id": "P1", "phenotype": ["HP:NEW", "HP:NEG"]}],
+    }]
+
+    result = stabilize_associations(
+        [document], base, final_entities, additions, addition_associations
+    )
+
+    assert result[0]["association"] == [{"patient_id": "P1", "phenotype": ["HP:NEW"]}]
 
 
 def test_fusion_can_union_multi_patient_sources() -> None:

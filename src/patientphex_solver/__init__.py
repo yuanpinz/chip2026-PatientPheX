@@ -23,6 +23,7 @@ from .fusion import (
     augment_associations_by_vote,
     clip_associations_to_entities,
     fuse_associations_by_vote,
+    stabilize_associations,
 )
 from .io import read_jsonl, validate_submission, write_jsonl
 from .llm import BigModelClient
@@ -58,6 +59,7 @@ __all__ = [
     "propagate_explicit_group_associations",
     "read_jsonl",
     "select_entities_by_vote",
+    "stabilize_associations",
     "subtract_entities",
     "validate_submission",
     "vote_entities",

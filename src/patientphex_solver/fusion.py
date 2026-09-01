@@ -3,9 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from .association import (
+    _finding_is_negated,
+    _sentence_bounds,
     filter_associations_by_structure,
     propagate_explicit_group_associations,
 )
+from .io import passage_for_offset
 
 JsonObject = dict[str, Any]
 
@@ -52,6 +55,171 @@ def clip_associations_to_entities(rows: list[JsonObject]) -> list[JsonObject]:
             for item in row.get("association", [])
         ]
         predictions.append({**row, "association": associations})
+    return predictions
+
+
+def _entity_values_for_association(entity: JsonObject) -> set[str]:
+    identifier = str(entity.get("identifier", ""))
+    if entity.get("note") == "NO":
+        return set()
+    if identifier == "-1":
+        return {str(entity.get("text", ""))}
+    return {value for value in identifier.split(";") if value}
+
+
+def _association_value_supported(value: str, allowed: set[str]) -> bool:
+    """Support both ordinary IDs and the compound-ID form used by the schema."""
+    if value in allowed:
+        return True
+    units = {unit for unit in value.split(";") if unit}
+    return bool(units) and units.issubset(allowed)
+
+
+def _entity_is_nested(entity: JsonObject, entities: list[JsonObject]) -> bool:
+    start = int(entity["offset"])
+    end = start + int(entity["length"])
+    for other in entities:
+        if other is entity:
+            continue
+        other_start = int(other["offset"])
+        other_end = other_start + int(other["length"])
+        if (
+            other_start <= start
+            and end <= other_end
+            and (other_start < start or end < other_end)
+            and other_end - other_start > end - start
+        ):
+            return True
+    return False
+
+
+def _addition_is_eligible(
+    document: JsonObject,
+    entity: JsonObject,
+    *,
+    entities: list[JsonObject],
+    sections: set[str],
+    reject_negated: bool,
+    reject_nested: bool,
+) -> bool:
+    located = passage_for_offset(document, int(entity["offset"]))
+    if located is None:
+        return False
+    _, passage = located
+    section = str(passage.get("section_type", "")).upper()
+    if section not in sections:
+        return False
+    if reject_nested and _entity_is_nested(entity, entities):
+        return False
+    if not reject_negated:
+        return True
+    text = str(passage.get("text", ""))
+    local_start = int(entity["offset"]) - int(passage["offset"])
+    local_end = local_start + int(entity["length"])
+    sentence_start, sentence_end = _sentence_bounds(text, local_start, local_end)
+    sentence = text[sentence_start:sentence_end]
+    return not _finding_is_negated(sentence, local_start - sentence_start)
+
+
+def stabilize_associations(
+    documents: list[JsonObject],
+    base_rows: list[JsonObject],
+    entity_rows: list[JsonObject],
+    addition_rows: list[JsonObject],
+    addition_association_rows: list[JsonObject],
+    *,
+    sections: set[str] | None = None,
+    reject_negated: bool = True,
+    reject_nested: bool = True,
+    new_values_only: bool = True,
+) -> list[JsonObject]:
+    """Reuse stable associations while adding API decisions for new entities.
+
+    ``base_rows`` supplies the already calibrated association decisions. The
+    final entity set comes from ``entity_rows``; old associations are clipped
+    to that set before additions are considered. Additions are accepted only
+    from selected article sections and are matched at occurrence level by the
+    API output in ``addition_association_rows``.
+    """
+    selected_sections = {
+        value.upper() for value in (sections or {"CASE", "METHODS", "RESULTS"})
+    }
+    base_by_id = _rows_by_id(base_rows)
+    entities_by_id = _rows_by_id(entity_rows)
+    additions_by_id = _rows_by_id(addition_rows)
+    addition_associations_by_id = _rows_by_id(addition_association_rows)
+    predictions: list[JsonObject] = []
+
+    for document in documents:
+        pmc_id = str(document["pmc_id"])
+        try:
+            base = base_by_id[pmc_id]
+            final_entities = list(entities_by_id[pmc_id].get("entities", []))
+            additions = list(additions_by_id[pmc_id].get("entities", []))
+            addition_associations = addition_associations_by_id[pmc_id]
+        except KeyError as exc:
+            raise ValueError(f"missing stabilization input for PMC {pmc_id}") from exc
+
+        allowed_values = {
+            value
+            for entity in final_entities
+            for value in _entity_values_for_association(entity)
+        }
+        old_associations = _association_sets(base)
+        old_values = set().union(*old_associations.values()) if old_associations else set()
+        eligible_values: set[str] = set()
+        for entity in additions:
+            if not _addition_is_eligible(
+                document,
+                entity,
+                entities=additions,
+                sections=selected_sections,
+                reject_negated=reject_negated,
+                reject_nested=reject_nested,
+            ):
+                continue
+            values = _entity_values_for_association(entity)
+            if new_values_only:
+                values.difference_update(old_values)
+            eligible_values.update(values)
+
+        extra_by_patient = _association_sets(addition_associations)
+        associations: list[JsonObject] = []
+        for patient in document.get("patient", []):
+            patient_id = str(patient["patient_id"])
+            values: list[str] = []
+            for item in base.get("association", []):
+                if str(item.get("patient_id")) != patient_id:
+                    continue
+                for raw_value in item.get("phenotype", []):
+                    value = str(raw_value)
+                    if (
+                        value in old_associations.get(patient_id, set())
+                        and _association_value_supported(value, allowed_values)
+                        and value not in values
+                    ):
+                        values.append(value)
+            for item in addition_associations.get("association", []):
+                if str(item.get("patient_id")) != patient_id:
+                    continue
+                for raw_value in item.get("phenotype", []):
+                    value = str(raw_value)
+                    if (
+                        value in extra_by_patient.get(patient_id, set())
+                        and _association_value_supported(value, eligible_values)
+                        and value not in values
+                    ):
+                        values.append(value)
+            associations.append({"patient_id": patient_id, "phenotype": values})
+
+        predictions.append(
+            {
+                "pmc_id": base["pmc_id"],
+                "pmid": base.get("pmid"),
+                "entities": final_entities,
+                "association": associations,
+            }
+        )
     return predictions
 
 
