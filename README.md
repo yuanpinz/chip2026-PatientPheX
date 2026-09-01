@@ -399,55 +399,41 @@ uv run patientphex-solver validate \
 `b62163fe3b1a0ae28a556a11186de80471fa38e450bc1fa13eee32c7f6617cc7`。
 留出结果只用于选择融合规则，是否超过榜首仍以天池平台实际评分为准。
 
-当前推荐的 API-only 路线在 v7 的基础上取两个独立 API 实体结果的完整 occurrence
-交集，再用 `modelH` 对所有患者做联合关联。关联阶段针对患者数量使用条件融合：患者数为
-`2–7` 时通常取 v7 关联和 `modelH` 关联的并集；如果某患者的 v7 关联数量与
-`modelH` 关联数量之比达到 `2`，则该患者只保留 `modelH` 结果。患者数为 `1` 或大于
-`7` 时只使用 `modelH` 关联；最后删除没有对应正实体的关联值。这一步同时支持复合 HPO ID
-与 `-1` 未映射文本，且不需要 GPU。
+## 当前推荐与留出审计
 
-相较于对所有文章直接并集的旧策略（两组严格留出分别为 `0.839225` 和 `0.861317`，
-合并 20 篇为 `0.854794`），基础条件策略分别得到 `0.843558` 和 `0.863813`，合并 20
-篇为 `0.857876`。加入比例规则后，两组严格留出分别为 `0.843558` 和 `0.865130`，
-合并 20 篇为 `0.858685`；合并关联 micro F1 为 `0.836364`，macro F1 为 `0.809243`，
-TP/FP/FN 为 `483/89/100`。A 集结果包含 20 篇文章、1284 个实体和 385 个关联值：
+审计发现，旧的 API 实体交集实验使用了包含目标文章标注信息的 replay 候选，例如
+`train_s56_entities_fuzzy_replay.jsonl`。因此该路线报告的 `0.858685` 不是有效的严格
+留出成绩，`pred_a_api_intersection_v7_h_conditional_ratio2_clipped.jsonl` 不再作为推荐
+提交文件。任何候选生成或 few-shot 校准都必须排除当前被评测文章。
+
+当前推荐仍是无本地 GPU 的 API-only v8：以 v7 为基础，只补充文章中明确定义且长度不
+超过 3 的短缩写 occurrence。三路 API 任一路明确接受即可加入；这条较宽松规则在两组
+互不重叠的严格留出上分别得到 `0.737838` 和 `0.768101`，合并 20 篇为 `0.759033`。
+合并成绩包含三模型全票的关联增强；第一组没有新增关联，第二组新增 3 个 TP 和 1 个 FP。
 
 ```bash
-uv run patientphex-solver select-entities \
+uv run patientphex-solver vote-entities \
   --base outputs/pred_a_cnn_final_v7.jsonl \
-  --sources outputs/pred_a_s56_entities_fuzzy_cached.jsonl \
-           outputs/pred_a_e6_entities_replay.jsonl \
-  --min-votes 2 \
-  --output outputs/pred_a_api_entity_intersection_v7.jsonl
-
-uv run patientphex-solver judge-associations \
-  --split a \
-  --candidates outputs/pred_a_api_entity_intersection_v7.jsonl \
-  --joint \
-  --model modelH \
-  --output outputs/pred_a_api_intersection_modelh_joint.jsonl
-
-uv run patientphex-solver fuse-associations \
-  --expected PatientPheX-V1-A/PatientPheX-A.jsonl \
-  --base outputs/pred_a_api_entity_intersection_v7.jsonl \
-  --primary outputs/pred_a_api_entity_intersection_v7.jsonl \
-  --secondary outputs/pred_a_api_intersection_modelh_joint.jsonl \
-  --union-patient-count-range 2 7 \
-  --max-primary-to-secondary-ratio 2 \
-  --output outputs/pred_a_api_intersection_v7_h_conditional_ratio2.jsonl
-
-uv run patientphex-solver clip-associations \
-  --input outputs/pred_a_api_intersection_v7_h_conditional_ratio2.jsonl \
-  --output outputs/pred_a_api_intersection_v7_h_conditional_ratio2_clipped.jsonl
+  --sources outputs/pred_a_abbreviation_judged_h.jsonl \
+            outputs/pred_a_abbreviation_judged_s56.jsonl \
+            outputs/pred_a_abbreviation_judged_s55.jsonl \
+  --min-votes 1 --max-text-length 3 \
+  --output outputs/pred_a_cnn_final_v8_abbrev_union.jsonl
 
 uv run patientphex-solver validate \
   --expected PatientPheX-V1-A/PatientPheX-A.jsonl \
-  --predicted outputs/pred_a_api_intersection_v7_h_conditional_ratio2_clipped.jsonl
+  --predicted outputs/pred_a_cnn_final_v8_abbrev_union.jsonl
 ```
 
-推荐提交文件 `outputs/pred_a_api_intersection_v7_h_conditional_ratio2_clipped.jsonl` 的
-SHA-256 为 `ace7f5549b5c09a9b3e09ef7fb458f6623992147a53ee1bb084764164826f65e`。
-留出分数用于本地选择策略，最终排名仍以天池实际提交结果为准。
+该文件包含 20 篇文章、1694 个实体和 501 个患者-表型关联值，SHA-256 为
+`83d66ac950c1c7508ce9f08d55ce57d3aceb2613c75ad80d2ae25125f951c4b8`。
+是否超过榜首仍以天池平台的真实提交分数为准。
+
+另对全部 80 篇训练文章做了严格 LOO 的窄 CNN 候选裁决。H、S5.6、S5.5 三路任一
+接受时，mention/document F1 为 `0.683641/0.763868`；要求 2/3 时为
+`0.682273/0.760324`，要求 3/3 时为 `0.677363/0.753089`。虽然 1/3 在稀疏基础实体
+上最好，但合并到现有高级流水线的 20 篇严格留出结果时只增加 4 个 FP、没有新增 TP；
+因此不据此改写 A 集 v8。
 
 也可以用 held-out 训练文章作为 few-shot 示例，让 API 发现词典遗漏的候选实体。模型只负责提出原文 span，HPO ID 仍由本地本体链接器校验：
 
@@ -470,4 +456,5 @@ uv run patientphex-solver fuse-associations \
   --output outputs/pred_a_final_fused.jsonl
 ```
 
-所有 API 原始响应都按请求内容 SHA-256 缓存在 `cache/llm/`。该目录已被 `.gitignore` 排除，避免将数据或响应提交到 Git。
+所有 API 原始响应都按请求内容 SHA-256 缓存在 `cache/llm/`。空正文或无法解析的 JSON
+会清除对应缓存并自动重试。该目录已被 `.gitignore` 排除，避免将数据或响应提交到 Git。

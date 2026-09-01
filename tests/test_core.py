@@ -39,7 +39,7 @@ from patientphex_solver.fusion import (
     fuse_associations_by_vote,
 )
 from patientphex_solver.io import validate_submission
-from patientphex_solver.llm import parse_json_response
+from patientphex_solver.llm import BigModelClient, parse_json_response
 from patientphex_solver.llm_entities import (
     discover_entities_article_with_llm,
     discover_entities_fewshot_with_llm,
@@ -53,6 +53,45 @@ from patientphex_solver.patient_phenotypes import (
 
 def test_parse_json_response_with_markdown_fence() -> None:
     assert parse_json_response('```json\n{"ok": true}\n```') == {"ok": True}
+
+
+def test_chat_json_retries_and_discards_invalid_cached_response(
+    tmp_path, monkeypatch
+) -> None:
+    client = BigModelClient(cache_dir=tmp_path, retries=2)
+    messages = [{"role": "user", "content": "return JSON"}]
+    payload = client._payload(
+        messages,
+        max_tokens=100,
+        temperature=0.0,
+        enable_thinking=False,
+    )
+    cache_path = client._cache_path(payload)
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text('{"text":"not JSON"}', encoding="utf-8")
+    responses = iter(["not JSON", '{"ok":true}'])
+    monkeypatch.setattr(client, "chat", lambda *args, **kwargs: next(responses))
+    monkeypatch.setattr("patientphex_solver.llm.time.sleep", lambda _: None)
+
+    assert client.chat_json(messages, max_tokens=100) == {"ok": True}
+    assert not cache_path.exists()
+
+
+def test_chat_json_retries_when_chat_returns_no_text(monkeypatch, tmp_path) -> None:
+    client = BigModelClient(cache_dir=tmp_path, retries=2)
+    messages = [{"role": "user", "content": "return JSON"}]
+    responses = iter([RuntimeError("empty response"), '{"ok":true}'])
+
+    def fake_chat(*args, **kwargs):
+        response = next(responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    monkeypatch.setattr(client, "chat", fake_chat)
+    monkeypatch.setattr("patientphex_solver.llm.time.sleep", lambda _: None)
+
+    assert client.chat_json(messages, max_tokens=100) == {"ok": True}
 
 
 def test_cnn_fusion_filters_overlap_and_caps_repeated_ids() -> None:

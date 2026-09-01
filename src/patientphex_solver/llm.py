@@ -136,6 +136,23 @@ class BigModelClient:
         digest = hashlib.sha256(material).hexdigest()
         return self.cache_dir / self.model / f"{digest}.json"
 
+    def _payload(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        max_tokens: int,
+        temperature: float,
+        enable_thinking: bool,
+    ) -> dict[str, Any]:
+        return {
+            "model_name": self.model,
+            "messages": messages,
+            "stream": False,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "enable_thinking": enable_thinking,
+        }
+
     def chat(
         self,
         messages: list[dict[str, str]],
@@ -144,14 +161,12 @@ class BigModelClient:
         temperature: float = 0.0,
         enable_thinking: bool = False,
     ) -> str:
-        payload = {
-            "model_name": self.model,
-            "messages": messages,
-            "stream": False,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "enable_thinking": enable_thinking,
-        }
+        payload = self._payload(
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            enable_thinking=enable_thinking,
+        )
         cache_path = self._cache_path(payload)
         if cache_path.exists():
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
@@ -197,4 +212,24 @@ class BigModelClient:
         *,
         max_tokens: int = 8000,
     ) -> Any:
-        return parse_json_response(self.chat(messages, max_tokens=max_tokens))
+        payload = self._payload(
+            messages,
+            max_tokens=max_tokens,
+            temperature=0.0,
+            enable_thinking=False,
+        )
+        cache_path = self._cache_path(payload)
+        last_error: Exception | None = None
+        for attempt in range(self.retries):
+            try:
+                return parse_json_response(
+                    self.chat(messages, max_tokens=max_tokens)
+                )
+            except (json.JSONDecodeError, RuntimeError) as exc:
+                last_error = exc
+                cache_path.unlink(missing_ok=True)
+                if attempt + 1 < self.retries:
+                    time.sleep(2**attempt)
+        raise RuntimeError(
+            f"model returned invalid JSON after {self.retries} attempts"
+        ) from last_error
