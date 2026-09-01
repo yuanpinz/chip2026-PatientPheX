@@ -446,6 +446,55 @@ def merge_entities(*collections: Iterable[JsonObject]) -> list[JsonObject]:
     )
 
 
+def subtract_entities(
+    base_rows: list[JsonObject],
+    candidate_rows: list[JsonObject],
+) -> list[JsonObject]:
+    """Return candidate occurrences that are absent from the base prediction.
+
+    Occurrences are compared by the same offset, length, identifier, and note
+    key used by :func:`merge_entities`. The base rows only provide document
+    order and metadata; their entities and associations are not copied.
+    """
+    candidates_by_id = {str(row["pmc_id"]): row for row in candidate_rows}
+    predictions: list[JsonObject] = []
+    for base in base_rows:
+        pmc_id = str(base["pmc_id"])
+        try:
+            candidates = candidates_by_id[pmc_id]
+        except KeyError as exc:
+            raise ValueError(f"missing candidate entity row for PMC {pmc_id}") from exc
+        existing = {
+            (
+                int(entity["offset"]),
+                int(entity["length"]),
+                str(entity["identifier"]),
+                entity.get("note"),
+            )
+            for entity in base.get("entities", [])
+        }
+        additions = [
+            entity
+            for entity in candidates.get("entities", [])
+            if (
+                int(entity["offset"]),
+                int(entity["length"]),
+                str(entity["identifier"]),
+                entity.get("note"),
+            )
+            not in existing
+        ]
+        predictions.append(
+            {
+                "pmc_id": base["pmc_id"],
+                "pmid": base.get("pmid"),
+                "entities": merge_entities(additions),
+                "association": [],
+            }
+        )
+    return predictions
+
+
 def select_entities_by_vote(
     base_rows: list[JsonObject],
     source_rows: list[list[JsonObject]],

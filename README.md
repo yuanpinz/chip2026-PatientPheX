@@ -401,14 +401,16 @@ uv run patientphex-solver validate \
 
 当前推荐的 API-only 路线在 v7 的基础上取两个独立 API 实体结果的完整 occurrence
 交集，再用 `modelH` 对所有患者做联合关联。关联阶段针对患者数量使用条件融合：患者数为
-`2–7` 时取 v7 关联和 `modelH` 关联的并集，患者数为 `1` 或大于 `7` 时只使用
-`modelH` 关联；最后删除没有对应正实体的关联值。这一步同时支持复合 HPO ID 与 `-1`
-未映射文本，且不需要 GPU。
+`2–7` 时通常取 v7 关联和 `modelH` 关联的并集；如果某患者的 v7 关联数量与
+`modelH` 关联数量之比达到 `2`，则该患者只保留 `modelH` 结果。患者数为 `1` 或大于
+`7` 时只使用 `modelH` 关联；最后删除没有对应正实体的关联值。这一步同时支持复合 HPO ID
+与 `-1` 未映射文本，且不需要 GPU。
 
 相较于对所有文章直接并集的旧策略（两组严格留出分别为 `0.839225` 和 `0.861317`，
-合并 20 篇为 `0.854794`），条件策略分别得到 `0.843558` 和 `0.863813`，合并 20 篇为
-`0.857876`。合并关联评估为 micro F1 `0.833474`、macro F1 `0.808896`，TP/FP/FN
-为 `493/107/90`。A 集结果包含 20 篇文章、1284 个实体和 401 个关联值：
+合并 20 篇为 `0.854794`），基础条件策略分别得到 `0.843558` 和 `0.863813`，合并 20
+篇为 `0.857876`。加入比例规则后，两组严格留出分别为 `0.843558` 和 `0.865130`，
+合并 20 篇为 `0.858685`；合并关联 micro F1 为 `0.836364`，macro F1 为 `0.809243`，
+TP/FP/FN 为 `483/89/100`。A 集结果包含 20 篇文章、1284 个实体和 385 个关联值：
 
 ```bash
 uv run patientphex-solver select-entities \
@@ -431,19 +433,20 @@ uv run patientphex-solver fuse-associations \
   --primary outputs/pred_a_api_entity_intersection_v7.jsonl \
   --secondary outputs/pred_a_api_intersection_modelh_joint.jsonl \
   --union-patient-count-range 2 7 \
-  --output outputs/pred_a_api_intersection_v7_h_conditional.jsonl
+  --max-primary-to-secondary-ratio 2 \
+  --output outputs/pred_a_api_intersection_v7_h_conditional_ratio2.jsonl
 
 uv run patientphex-solver clip-associations \
-  --input outputs/pred_a_api_intersection_v7_h_conditional.jsonl \
-  --output outputs/pred_a_api_intersection_v7_h_conditional_clipped.jsonl
+  --input outputs/pred_a_api_intersection_v7_h_conditional_ratio2.jsonl \
+  --output outputs/pred_a_api_intersection_v7_h_conditional_ratio2_clipped.jsonl
 
 uv run patientphex-solver validate \
   --expected PatientPheX-V1-A/PatientPheX-A.jsonl \
-  --predicted outputs/pred_a_api_intersection_v7_h_conditional_clipped.jsonl
+  --predicted outputs/pred_a_api_intersection_v7_h_conditional_ratio2_clipped.jsonl
 ```
 
-推荐提交文件 `outputs/pred_a_api_intersection_v7_h_conditional_clipped.jsonl` 的
-SHA-256 为 `dca6bcfa984701225542f338686f7e1a117e7fbc23e5d2924155e8b27862b328`。
+推荐提交文件 `outputs/pred_a_api_intersection_v7_h_conditional_ratio2_clipped.jsonl` 的
+SHA-256 为 `ace7f5549b5c09a9b3e09ef7fb458f6623992147a53ee1bb084764164826f65e`。
 留出分数用于本地选择策略，最终排名仍以天池实际提交结果为准。
 
 也可以用 held-out 训练文章作为 few-shot 示例，让 API 发现词典遗漏的候选实体。模型只负责提出原文 span，HPO ID 仍由本地本体链接器校验：

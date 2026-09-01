@@ -15,6 +15,7 @@ from .entities import (
     GazetteerExtractor,
     merge_entities,
     select_entities_by_vote,
+    subtract_entities,
     vote_entities,
 )
 from .evaluation import evaluate
@@ -57,6 +58,7 @@ __all__ = [
     "propagate_explicit_group_associations",
     "read_jsonl",
     "select_entities_by_vote",
+    "subtract_entities",
     "validate_submission",
     "vote_entities",
     "write_jsonl",

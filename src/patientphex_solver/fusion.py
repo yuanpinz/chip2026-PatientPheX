@@ -63,6 +63,7 @@ def fuse_associations_by_patient_count(
     *,
     union_multi: bool = False,
     union_patient_count_range: tuple[int, int] | None = None,
+    max_primary_to_secondary_ratio: float | None = None,
     structure_previous_distance: int | None = None,
     structure_next_distance: int | None = None,
 ) -> list[JsonObject]:
@@ -74,6 +75,11 @@ def fuse_associations_by_patient_count(
     validated experimental policy that unions both sources for all articles.
     ``union_patient_count_range`` overrides both policies and unions sources only
     when the article patient count is within the inclusive range.
+    When ``max_primary_to_secondary_ratio`` is set, a patient that would use the
+    union instead uses only the non-empty secondary values when its primary
+    value count divided by its secondary value count reaches the threshold.
+    This protects the union from a primary model that produces substantially
+    more candidates for one patient while leaving other patients unaffected.
     Entity annotations always come from the supplied base rows. Optional local
     structure filtering is applied after fusion.
     """
@@ -83,6 +89,11 @@ def fuse_associations_by_patient_count(
             raise ValueError(
                 "union patient count range must satisfy 1 <= minimum <= maximum"
             )
+    if (
+        max_primary_to_secondary_ratio is not None
+        and max_primary_to_secondary_ratio <= 0
+    ):
+        raise ValueError("primary-to-secondary ratio must be positive")
 
     base_by_id = _rows_by_id(base_rows)
     primary_by_id = _rows_by_id(primary_rows)
@@ -111,11 +122,22 @@ def fuse_associations_by_patient_count(
         associations: list[JsonObject] = []
         for patient in document.get("patient", []):
             patient_id = str(patient["patient_id"])
+            primary_values = primary_sets.get(patient_id, set())
             secondary_values = secondary_sets.get(patient_id, set())
+            use_secondary_only = False
+            if (
+                use_union
+                and max_primary_to_secondary_ratio is not None
+                and secondary_values
+            ):
+                secondary_count = len(secondary_values)
+                primary_count = len(primary_values)
+                ratio = primary_count / secondary_count
+                use_secondary_only = ratio >= max_primary_to_secondary_ratio
             selected = (
-                primary_sets.get(patient_id, set()) | secondary_values
-                if use_union
-                else secondary_values
+                secondary_values
+                if not use_union or use_secondary_only
+                else primary_values | secondary_values
             )
             ordered: list[str] = []
             for source in (primary, secondary):

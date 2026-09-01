@@ -24,6 +24,7 @@ from patientphex_solver.entities import (
     GazetteerExtractor,
     merge_entities,
     select_entities_by_vote,
+    subtract_entities,
     vote_entities,
 )
 from patientphex_solver.entity_judge import (
@@ -636,6 +637,64 @@ def test_select_entities_by_vote_can_replace_base_with_exact_intersection() -> N
     assert selected[0]["association"] == base[0]["association"]
 
 
+def test_subtract_entities_keeps_only_unseen_candidate_occurrences() -> None:
+    base = [
+        {
+            "pmc_id": "doc",
+            "pmid": "1",
+            "entities": [
+                {
+                    "offset": 10,
+                    "length": 3,
+                    "identifier": "HP:A",
+                    "text": "one",
+                    "note": None,
+                }
+            ],
+            "association": [{"patient_id": "P1", "phenotype": ["HP:A"]}],
+        }
+    ]
+    candidates = [
+        {
+            "pmc_id": "doc",
+            "entities": [
+                {
+                    "offset": 10,
+                    "length": 3,
+                    "identifier": "HP:A",
+                    "text": "one",
+                    "note": None,
+                },
+                {
+                    "offset": 20,
+                    "length": 3,
+                    "identifier": "HP:B",
+                    "text": "two",
+                    "note": None,
+                },
+            ],
+        }
+    ]
+
+    result = subtract_entities(base, candidates)
+    assert result == [
+        {
+            "pmc_id": "doc",
+            "pmid": "1",
+            "entities": [
+                {
+                    "offset": 20,
+                    "length": 3,
+                    "identifier": "HP:B",
+                    "text": "two",
+                    "note": None,
+                }
+            ],
+            "association": [],
+        }
+    ]
+
+
 def test_clip_associations_to_entities_supports_compound_ids_and_unmapped_text() -> None:
     rows = [
         {
@@ -736,6 +795,63 @@ def test_fusion_rejects_invalid_patient_count_range() -> None:
             [],
             [],
             union_patient_count_range=(3, 2),
+        )
+
+
+def test_fusion_can_suppress_primary_outlier_per_patient() -> None:
+    document = {
+        "pmc_id": "multi",
+        "patient": [
+            {"patient_id": "P1"},
+            {"patient_id": "P2"},
+            {"patient_id": "P3"},
+        ],
+    }
+    base = [{"pmc_id": "multi", "pmid": "1", "entities": []}]
+    primary = [
+        {
+            "pmc_id": "multi",
+            "association": [
+                {"patient_id": "P1", "phenotype": ["A", "B", "C", "D"]},
+                {"patient_id": "P2", "phenotype": ["E"]},
+                {"patient_id": "P3", "phenotype": ["H"]},
+            ],
+        }
+    ]
+    secondary = [
+        {
+            "pmc_id": "multi",
+            "association": [
+                {"patient_id": "P1", "phenotype": ["A", "B"]},
+                {"patient_id": "P2", "phenotype": ["F", "G"]},
+                {"patient_id": "P3", "phenotype": []},
+            ],
+        }
+    ]
+
+    fused = fuse_associations_by_patient_count(
+        [document],
+        base,
+        primary,
+        secondary,
+        union_patient_count_range=(2, 7),
+        max_primary_to_secondary_ratio=2,
+    )
+    assert fused[0]["association"] == [
+        {"patient_id": "P1", "phenotype": ["A", "B"]},
+        {"patient_id": "P2", "phenotype": ["E", "F", "G"]},
+        {"patient_id": "P3", "phenotype": ["H"]},
+    ]
+
+
+def test_fusion_rejects_non_positive_primary_secondary_ratio() -> None:
+    with pytest.raises(ValueError, match="ratio must be positive"):
+        fuse_associations_by_patient_count(
+            [],
+            [],
+            [],
+            [],
+            max_primary_to_secondary_ratio=0,
         )
 
 

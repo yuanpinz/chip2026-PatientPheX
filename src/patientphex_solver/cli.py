@@ -24,6 +24,7 @@ from .entities import (
     GazetteerExtractor,
     merge_entities,
     select_entities_by_vote,
+    subtract_entities,
     vote_entities,
 )
 from .entity_judge import build_calibration_examples, judge_entities_with_llm
@@ -251,6 +252,7 @@ def _cmd_fuse_associations(args: argparse.Namespace) -> None:
             if args.union_patient_count_range is not None
             else None
         ),
+        max_primary_to_secondary_ratio=args.max_primary_to_secondary_ratio,
         structure_previous_distance=args.structure_previous_distance,
         structure_next_distance=args.structure_next_distance,
     )
@@ -393,6 +395,16 @@ def _cmd_select_entities(args: argparse.Namespace) -> None:
         [read_jsonl(path) for path in args.sources],
         min_votes=args.min_votes,
         max_text_length=args.max_text_length,
+    )
+    write_jsonl(args.output, predictions)
+    total = sum(len(row.get("entities", [])) for row in predictions)
+    print(f"wrote {args.output} ({len(predictions)} documents, {total} entities)")
+
+
+def _cmd_subtract_entities(args: argparse.Namespace) -> None:
+    predictions = subtract_entities(
+        read_jsonl(args.base),
+        read_jsonl(args.candidates),
     )
     write_jsonl(args.output, predictions)
     total = sum(len(row.get("entities", [])) for row in predictions)
@@ -708,6 +720,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     fuse.add_argument(
+        "--max-primary-to-secondary-ratio",
+        type=float,
+        default=None,
+        metavar="RATIO",
+        help=(
+            "when sources would be unioned, use only secondary values for a "
+            "patient if non-empty primary_count / secondary_count reaches RATIO"
+        ),
+    )
+    fuse.add_argument(
         "--structure-previous-distance",
         type=int,
         default=None,
@@ -830,6 +852,15 @@ def build_parser() -> argparse.ArgumentParser:
     select_entities.add_argument("--max-text-length", type=int, default=None)
     select_entities.add_argument("--output", required=True)
     select_entities.set_defaults(func=_cmd_select_entities)
+
+    subtract = subparsers.add_parser(
+        "subtract-entities",
+        help="emit candidate entity occurrences absent from a base JSONL",
+    )
+    subtract.add_argument("--base", required=True)
+    subtract.add_argument("--candidates", required=True)
+    subtract.add_argument("--output", required=True)
+    subtract.set_defaults(func=_cmd_subtract_entities)
 
     clip = subparsers.add_parser(
         "clip-associations",
