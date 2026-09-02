@@ -16,7 +16,7 @@ main{max-width:1120px;margin:0 auto;padding:46px 22px 72px}.hero{padding:10px 0 
 </style>
 </head>
 <body>
-<div class="topbar"><div>CHIP2026 · PatientPheX · 实验总结</div><div class="repo"><a href="https://github.com/yuanpinz/chip2026-PatientPheX">GitHub 仓库</a> · 更新基线：<span class="mono">f5eabfb</span></div></div>
+<div class="topbar"><div>CHIP2026 · PatientPheX · 实验总结</div><div class="repo"><a href="https://github.com/yuanpinz/chip2026-PatientPheX">GitHub 仓库</a> · 文档基线：<span class="mono">c447a24</span></div></div>
 <main>
 <section class="hero">
 <div class="eyebrow">Hybrid phenotype extraction without local GPU</div>
@@ -25,7 +25,7 @@ main{max-width:1120px;margin:0 auto;padding:46px 22px 72px}.hero{padding:10px 0 
 <div class="notice"><strong>结果边界：</strong>当前最高分是训练集严格留一的本地估计，不等于天池线上分数，也不能据此声称已经超过第一名。A 榜候选尚未成功上传；Chrome 文件选择器需要开启“允许访问文件网址”。</div>
 </section>
 <section class="metrics">
-<div class="metric"><span class="label">严格留一最高总分</span><span class="value">0.684781</span><span class="detail">79 篇训练文章逐篇留出</span></div>
+<div class="metric"><span class="label">严格留一最高总分</span><span class="value">0.684995</span><span class="detail">79 篇训练文章逐篇留出，关联已重新裁剪</span></div>
 <div class="metric"><span class="label">当前 A 榜候选</span><span class="value">20 篇</span><span class="detail">1408 个实体 · 466 个关联值</span></div>
 <div class="metric"><span class="label">本地测试</span><span class="value">62 passed</span><span class="detail"><code>uv run pytest -q</code></span></div>
 <div class="metric"><span class="label">天池剩余机会</span><span class="value">5 次</span><span class="detail">提交页已登录，尚未消耗本轮机会</span></div>
@@ -36,7 +36,7 @@ main{max-width:1120px;margin:0 auto;padding:46px 22px 72px}.hero{padding:10px 0 
 <div class="panel"><h3>工程与合规约束</h3><ul><li>环境由 <code>uv</code> 管理，代码由 GitHub 管理。</li><li>本机没有 GPU，正式流程只使用赛题允许的 <code>modelE6-9-local</code> 9B API。</li><li>训练集留一评估时，目标文章不进入词典、表面精度校准、实体审核示例或关联提示词。</li><li>API 响应按请求 SHA-256 缓存，断点可续跑，避免重复消耗 API。</li></ul></div>
 </div>
 <h2>2. 迭代结果</h2>
-<p class="small">下表来自当前工作树中的严格留一实验记录；分数公式为实体和关联四项 F1 的等权组合。数值保留 5 位用于比较，当前最佳文件的精确复算值为 <code>0.6847813035</code>。</p>
+<p class="small">下表来自当前工作树中的严格留一实验记录；分数公式为实体和关联四项 F1 的等权组合。数值保留 5 位用于比较，按最终审核实体重新裁剪关联后的最佳文件精确复算值为 <code>0.6849954462</code>。</p>
 <table><thead><tr><th>路线</th><th class="num">Mention F1</th><th class="num">Document F1</th><th class="num">Assoc. micro F1</th><th class="num">Assoc. macro F1</th><th class="num">总分</th></tr></thead>
 <tbody>
 <tr><td>严格留一词典基线</td><td class="num">0.65590</td><td class="num">0.72560</td><td class="num">0.52208</td><td class="num">0.43888</td><td class="num">0.58561</td></tr>
@@ -44,9 +44,9 @@ main{max-width:1120px;margin:0 auto;padding:46px 22px 72px}.hero{padding:10px 0 
 <tr><td>+ 9B occurrence-level 患者关联</td><td class="num">0.68053</td><td class="num">0.76447</td><td class="num">0.65982</td><td class="num">0.59490</td><td class="num">0.67493</td></tr>
 <tr><td>+ 稳定关联融合</td><td class="num">0.68820</td><td class="num">0.76813</td><td class="num">0.66422</td><td class="num">0.59746</td><td class="num">0.67950</td></tr>
 <tr><td>+ 训练集表面精度校准</td><td class="num">0.69071</td><td class="num">0.77179</td><td class="num">0.66568</td><td class="num">0.59869</td><td class="num">0.68172</td></tr>
-<tr class="best"><td>+ 9B 实体审核门控（当前最佳）</td><td class="num">0.69320</td><td class="num">0.77318</td><td class="num">0.67177</td><td class="num">0.60098</td><td class="num">0.68478</td></tr>
+<tr class="best"><td>+ 9B 实体审核门控（当前最佳）</td><td class="num">0.69320</td><td class="num">0.77318</td><td class="num">0.67211</td><td class="num">0.60149</td><td class="num">0.68500</td></tr>
 </tbody></table>
-<p class="small">相对词典基线，当前最佳严格留一总分提升约 <span class="delta">+0.09917</span>；主要增益来自患者关联，实体审核门控继续小幅提升实体和关联质量。</p>
+<p class="small">相对词典基线，当前最佳严格留一总分提升约 <span class="delta">+0.09939</span>；主要增益来自患者关联，实体审核门控继续小幅提升实体和关联质量。</p>
 <h2>3. 实验时间线</h2>
 <div class="timeline">
 <div class="event"><div class="date">2026-08-28</div><h3>建立混合求解器</h3><p>读取 PatientPheX 数据和 HPO 本体，构造可校验的 JSONL 输出与本地评估器，先得到词典基线。</p></div>
@@ -63,18 +63,97 @@ main{max-width:1120px;margin:0 auto;padding:46px 22px 72px}.hero{padding:10px 0 
 <div class="step"><strong>④ 患者关联融合</strong><small>occurrence-level primary + joint secondary；患者数 2–4 时联合，其他文章使用 primary，最后裁剪到审核实体。</small></div>
 </div>
 <div class="panel" style="margin-top:16px"><h3>当前 A 榜候选</h3><p><code>outputs/pred_a_p05_surfacewide_p01_cap20_gate_case_fig_methods_results_table_l9_primary_outside_joint_2to4.jsonl</code></p><div class="status-line"><span class="tag">20 documents</span><span class="tag">1408 entities</span><span class="tag">1401 positive</span><span class="tag">7 negative</span><span class="tag">466 association values</span><span class="tag">445 unique HPO IDs</span></div><p class="small">该文件已通过本地 <code>validate</code>。README 中“1427 个实体、470 个关联值”属于较早候选的历史统计，当前文件统计以上述实测值为准。</p></div>
-<h2>5. 已尝试但未进入最终流程的方向</h2>
+<h2>5. 真实案例：PMC12798528 如何完成端到端处理</h2>
+<p>下面用训练集文章 <em>One mutation, divergent journeys: expanding the clinical spectrum of homozygous SAMHD1 deficiency in childhood</em> 展开一篇文章的完整处理。它有 3 个患者，而且三人的表型差异明显，正好能说明为什么不能把整篇文章识别到的 HPO 全部复制给每个患者。</p>
+<div class="notice"><strong>数据边界：</strong>本文中的训练金标准只用于离线核对召回和 F1，不会作为推理输入。推理时使用的是文章原文、患者锚点、HPO 词典、PhenoTagger 候选和 API 返回的候选索引。文中标注“金标准”的内容不是模型看到的标签。</div>
+<div class="grid-2">
+<div class="panel"><h3>文章与输入记录</h3><p><span class="tag">pmc_id 12798528</span><span class="tag">pmid 41496005</span><span class="tag">3 patients</span></p><p>原文被保存为 <code>full_text</code> 段落，每个段落带全局 <code>offset</code>。实体也使用同一坐标系，所以后续可以把候选准确定位回 CASE、METHODS 或 DISCUSS 段，而不是只依赖字符串距离。</p></div>
+<div class="panel"><h3>患者锚点</h3><table><thead><tr><th>患者</th><th>原文锚点</th><th>全局 offset</th></tr></thead><tbody>
+<tr><td><strong>O1</strong></td><td><code>Patient 1</code><br><code>A 10.5-year-old girl</code><br><code>She</code></td><td>6779<br>6820<br>8479</td></tr>
+<tr><td><strong>O2</strong></td><td><code>Patient 2</code><br><code>A male infant</code></td><td>9341<br>9395</td></tr>
+<tr><td><strong>O3</strong></td><td><code>Patient 3</code><br><code>A female patient</code></td><td>11257<br>11317</td></tr>
+</tbody></table></div>
+</div>
+<h3 style="margin-top:22px">5.1 原文先被切成患者可解释的局部 case block</h3>
+<div class="grid-2">
+<div class="panel"><h3>O1 · myopathy-dominant</h3><pre>Patient 1: a myopathy-dominant phenotype
+
+A 10.5-year-old girl was evaluated for a two-year history of progressive difficulty in squatting, limited shoulder mobility when combing her hair and gait abnormality characterized by dragging of her right foot in a circumductive pattern. Despite the absence of overt joint swelling or inflammation, she reported mild morning stiffness lasting 3-5 min. Physical examination revealed fixed flexion contractures of the elbows, wrists and knees, along with bilateral shoulder restriction and positive Gowers' sign. Dermatologic findings included heliotrope-like discoloration around the eyes, intermittent palmar erythema and episodes of non-painful oral aphthae.</pre><p class="small">这一段从 offset 6820 开始，O1 的后续 <code>She</code> 锚点仍在同一 case block 中。</p></div>
+<div class="panel"><h3>O2 · CNS dominant with panniculitis</h3><pre>Patient 2: a CNS dominant phenotype with panniculitis
+
+A male infant presented with erythematous nodular lesions over the anterior tibial surfaces and dorsum of the feet, which progressed to panniculitis-like plaques extending to the knees. Concurrent swelling was noted in the dorsal aspect of the hands and forearms, without frank arthritis. Low-grade fevers and mouth ulcers occurred intermittently. Brain MRI performed due to developmental delay revealed subcortical and basal ganglia calcifications, hypomyelination and cerebral volume loss. Over time, he developed progressive digital contractures and calcified nodules.</pre><p class="small">O2 的 heading offset 为 9341，finding 段从 offset 9395 开始，O1 的上下文不会进入这个局部患者判断。</p></div>
+<div class="panel"><h3>O3 · lupus-like / connective tissue disease</h3><pre>Patient 3: a lupus-like/connective tissue disease phenotype
+
+A female patient initially presented at six years of age with recurrent facial rash, joint discomfort and photosensitivity. Skin involvement fluctuated but never completely resolved, characterized by erythematous plaques on the face, limbs and trunk. She also reported morning stiffness, finger swelling and livedo-like discoloration in cold environments. Brain MRI showed cerebellar telangiectasia and developmental venous anomalies, but no calcifications. She gradually developed digital calcinosis, contractures and decreased range of motion in multiple joints.</pre><p class="small">O3 的 finding 段从 offset 11317 开始；“but no calcifications”和后面的“no history of seizures”会触发否定标记处理。</p></div>
+<div class="panel"><h3>为什么要保留原文上下文</h3><p>同一个词可能出现在多个患者段落中，例如 <code>cerebral calcifications</code> 在 O2 的段落是阳性 finding，而 O1/O3 的影像描述可能是否定或没有该 finding。代码先保留 occurrence 的 <code>offset</code>、<code>length</code> 和 containing passage，再让患者关联只选择有句子和段落证据的 occurrence。</p></div>
+</div>
+<h3 style="margin-top:22px">5.2 词典基线先给出稳定实体</h3>
+<p>第一步不调用 API。程序把 HPO OBO 的名称和别名规范化后，与文章原文做精确 surface 匹配；训练集留一时，表面精度只由另外 79 篇文章估计。这个案例的词典基线产生 <strong>85 个实体</strong>，例如：</p>
+<table><thead><tr><th>原文 occurrence</th><th>HPO</th><th>offset</th><th>作用</th></tr></thead><tbody>
+<tr><td><code>myopathy</code></td><td><code>HP:0003198</code></td><td>6792</td><td>O1 的疾病表现，词典直接命中。</td></tr>
+<tr><td><code>flexion contractures of the elbows</code></td><td><code>HP:0002987</code></td><td>7209</td><td>O1 的精确长实体，保留原文边界。</td></tr>
+<tr><td><code>panniculitis</code></td><td><code>HP:0012490</code></td><td>9382 / 9531 / 9771</td><td>O2 段落中的多个 occurrence，后续按患者和 occurrence 去重。</td></tr>
+<tr><td><code>photosensitivity</code></td><td><code>HP:0000992</code></td><td>11423</td><td>O3 的阳性 finding，和 O1 句子中的相同 surface 必须分开判断。</td></tr>
+</tbody></table>
+<p class="small">基线的局限也很直观：它没有覆盖 O1 的 <code>gait abnormality</code>、<code>positive Gowers' sign</code>，没有覆盖 O2 的 <code>mouth ulcers</code>、<code>progressive digital contractures</code>，也没有覆盖 O3 的 <code>erythematous plaques</code> 和 <code>developmental venous anomalies</code>。</p>
+<h3 style="margin-top:22px">5.3 CNN 只负责补召回，不能直接决定最终结果</h3>
+<p>PhenoTagger 在 CPU 上生成候选后，融合器使用四个硬条件：分数至少 <code>0.9997</code>、文本长度至少 6、避开已存在实体的 overlap、同一 HPO 每篇最多 20 个 occurrence；同时用留一表面精度 <code>0.5</code> 做过滤。于是本例从 85 个基线实体扩展到 <strong>101 个候选</strong>，新增 16 个 occurrence。</p>
+<table><thead><tr><th>候选文本</th><th>HPO</th><th>offset</th><th>9B 审核后的处理</th></tr></thead><tbody>
+<tr><td><code>gait abnormality</code></td><td><code>HP:0001288</code></td><td>6970</td><td><span class="tag">保留</span> O1 case 句子的完整表型。</td></tr>
+<tr><td><code>positive Gowers</code></td><td><code>HP:0003391</code></td><td>7309</td><td><span class="tag">保留</span> O1 的体征，CNN 补上了词典漏检。</td></tr>
+<tr><td><code>mouth ulcers</code></td><td><code>HP:0000155</code></td><td>9705</td><td><span class="tag">保留</span> O2 的间歇性表现。</td></tr>
+<tr><td><code>progressive digital contractures</code></td><td><code>HP:0005876</code></td><td>10077</td><td><span class="tag">保留</span> O2 的进展性表现。</td></tr>
+<tr><td><code>erythematous plaques</code></td><td><code>HP:0025474</code></td><td>11517</td><td><span class="tag">保留</span> O3 的皮肤表现。</td></tr>
+<tr><td><code>developmental venous anomalies</code></td><td><code>HP:0012481</code></td><td>11969</td><td><span class="tag">保留</span> O3 的 MRI finding。</td></tr>
+<tr><td><code>heliotrope-</code></td><td><code>HP:0040324</code></td><td>7363</td><td><span class="tag warn">拒绝</span> 边界被截断，不作为最终实体。</td></tr>
+<tr><td><code>proximal muscle</code></td><td><code>HP:0007126</code></td><td>9092</td><td><span class="tag warn">拒绝</span> 来自治疗反应描述，短语本身不是稳定的患者表型实体。</td></tr>
+<tr><td><code>erythematous nodular</code></td><td><code>HP:0030350</code></td><td>9424</td><td><span class="tag warn">拒绝</span> 不完整修饰短语，不能替代完整 finding。</td></tr>
+</tbody></table>
+<p class="small">16 个新增中，最终保留 13 个：CASE/METHODS 中满足门控条件的候选接受 9B 审核；DISCUSS、CONCL 等门控范围外的候选（如 <code>ataxia</code>、<code>Raynaud-</code>、<code>subcutaneous calcifications</code>）不会因为 9B 对 CASE 候选的判断而被误删。最终门控实体文件是 <code>outputs/train_loo_p05_surfacewide_p01_cap20_judged_gate_case_methods_len9_entities.jsonl</code>，本例含 98 个实体。</p>
+<h3 style="margin-top:22px">5.4 9B 只做受限审核，API 不生成新的 HPO</h3>
+<div class="panel"><p>实体审核 prompt 只让 <code>modelE6-9-local</code> 在供应的 CNN 新增候选中选择应保留的 occurrence。它不能修改 offset、不能发明 HPO ID，也不能删除词典实体。代码随后用候选的完整 key（<code>offset, length, identifier, note</code>）做集合过滤，因此“审核通过”是保留已有候选，不是让大模型自由抽取。</p><pre>base_entities = dictionary_entities
+cnn_additions = high_confidence_cnn - overlapping_or_low_precision_candidates
+reviewed_additions = modelE6_9_selects(cnn_additions)
+final_entities = base_entities + gated(reviewed_additions)
+
+# association can use only this final positive entity set
+final_associations = clip_associations_to_entities(
+    associations, entity_rows=final_entities
+)</pre><p class="small">否定 finding 仍可以出现在实体列表中，例如 O1 的 <code>intracranial calcifications</code> 或 O3 的 <code>fever</code> 可能带 <code>note: &quot;NO&quot;</code>。关联阶段只把 <code>note != &quot;NO&quot;</code> 的实体作为正向候选，所以否定信息不会被当作患者患有该表型。</p></div>
+<h3 style="margin-top:22px">5.5 occurrence-level 关联怎样把候选分给 O1/O2/O3</h3>
+<p>关联不是“一个 HPO 在文章中出现过，就给所有患者”。程序把每个实体 occurrence 编号，并把它所在句子、passage、offset 和患者 mention 一起交给 API。primary 路线对每个患者单独询问；joint 路线一次把 O1/O2/O3 放在同一个请求里，让患者之间产生竞争。两路都只返回已有的全局候选 index。</p>
+<table><thead><tr><th>候选 occurrence</th><th>结构证据</th><th>最终归属</th><th>原因</th></tr></thead><tbody>
+<tr><td><code>gait abnormality</code><br><code>HP:0001288</code><br>offset 6970</td><td>位于 O1 的 CASE passage 6820，且同一患者描述中出现 dragging of her right foot。</td><td><strong>O1</strong></td><td>同一患者 case block 的明确临床表现，不复制给 O2/O3。</td></tr>
+<tr><td><code>mouth ulcers</code><br><code>HP:0000155</code><br>offset 9705</td><td>位于 O2 的 finding 段 9395；句子明确说 intermittent。</td><td><strong>O2</strong></td><td>局部句子将 finding 归给 male infant。</td></tr>
+<tr><td><code>cerebral calcifications</code><br><code>HP:0002514</code><br>offset 11125</td><td>仍在 O2 的长 CASE passage，紧邻 O2 的 MRI 叙述。</td><td><strong>O2</strong></td><td>O2 的脑 MRI 阳性结果；不是按文章标题或疾病背景泛化。</td></tr>
+<tr><td><code>erythematous plaques</code><br><code>HP:0025474</code><br>offset 11517</td><td>位于 O3 的 CASE passage 11317，描述 face, limbs and trunk。</td><td><strong>O3</strong></td><td>明确位于 O3 的 skin involvement 句子。</td></tr>
+<tr><td><code>developmental venous anomalies</code><br><code>HP:0012481</code><br>offset 11969</td><td>位于 O3 段落的 Brain MRI 句子，和 “but no calcifications” 同句。</td><td><strong>O3</strong></td><td>保留阳性 vascular finding；同句的否定 calcifications 不进入正向 association。</td></tr>
+<tr><td><code>fever</code><br><code>HP:0001945</code><br>offset 11820<br><span class="tag warn">NO</span></td><td>O3 句子为 <code>Despite the absence of significant fever episodes</code>。</td><td>不进入 association</td><td><code>note: &quot;NO&quot;</code> 只表达否定证据，不表示 O3 患有 fever。</td></tr>
+</tbody></table>
+<h3 style="margin-top:22px">5.6 两路关联融合和最终 JSONL</h3>
+<div class="grid-2">
+<div class="panel"><h3>为什么要两路</h3><p>primary 对单个患者的局部证据敏感，适合非多患者文章；joint 能看到所有患者并抑制“同一个 finding 复制给每个人”。本例有 3 个患者，落在配置的 <code>2–4</code> 范围内，因此使用两路结果的并集；范围外文章只保留 primary。</p><p>融合前先用最终审核实体集裁剪两路 association。这一步会删除历史关联中指向已拒绝实体的值，例如 <code>HP:0040324</code> 和 <code>HP:0007126</code>，防止实体审核和患者关联不一致。</p></div>
+<div class="panel"><h3>本案例的数量变化</h3><table><tbody><tr><th>阶段</th><th class="num">实体</th><th class="num">关联值</th></tr><tr><td>词典基线</td><td class="num">85</td><td class="num">28</td></tr><tr><td>+ CNN 候选</td><td class="num">101</td><td class="num">28</td></tr><tr><td>+ 门控审核</td><td class="num">98</td><td class="num">28</td></tr><tr class="best"><td>+ 裁剪并融合</td><td class="num">98</td><td class="num">29</td></tr></tbody></table><p class="small">关联值按 O1/O2/O3 分别为 9、7、13；其中 O3 的 <code>HP:0012481</code> 由 joint 路补充，最终保留。</p></div>
+</div>
+<p>按当前一致性修正版生成的结果如下；这段 JSONL 只展示本案例的 association 核心字段，完整实体列表仍以输出文件为准：</p>
+<pre>{&quot;pmc_id&quot;:&quot;12798528&quot;,&quot;association&quot;:[
+  {&quot;patient_id&quot;:&quot;O1&quot;,&quot;phenotype&quot;:[&quot;HP:0003198&quot;,&quot;HP:0001288&quot;,&quot;HP:0001386&quot;,&quot;HP:0002987&quot;,&quot;HP:0003391&quot;,&quot;HP:0010783&quot;,&quot;HP:0011107&quot;,&quot;HP:0100614&quot;,&quot;HP:0009071&quot;]},
+  {&quot;patient_id&quot;:&quot;O2&quot;,&quot;phenotype&quot;:[&quot;HP:0012490&quot;,&quot;HP:0000155&quot;,&quot;HP:0001263&quot;,&quot;HP:0002135&quot;,&quot;HP:0005876&quot;,&quot;HP:0034392&quot;,&quot;HP:0002514&quot;]},
+  {&quot;patient_id&quot;:&quot;O3&quot;,&quot;phenotype&quot;:[&quot;HP:0000988&quot;,&quot;HP:0000992&quot;,&quot;HP:0025474&quot;,&quot;HP:0025131&quot;,&quot;HP:0033832&quot;,&quot;HP:5210343&quot;,&quot;HP:0032252&quot;,&quot;HP:0001009&quot;,&quot;HP:0000543&quot;,&quot;HP:0000980&quot;,&quot;HP:0003761&quot;,&quot;HP:0034392&quot;,&quot;HP:0012481&quot;]}
+]}</pre>
+<p class="small">该案例的可复现最终文件为 <code>outputs/train_loo_p05_surfacewide_p01_cap20_gate_case_methods_len9_primary_outside_joint_2to4.jsonl</code>，已使用训练集 schema 通过 <code>validate</code>。训练金标准文件 <code>PatientPheX-V1-A/PatientPheX-train.jsonl</code> 只用于离线评分和本文核对。</p>
+<h2>6. 已尝试但未进入最终流程的方向</h2>
 <div class="grid-2">
 <div class="panel"><h3>实体侧</h3><ul><li>低阈值 CNN、放宽最短文本和大范围 surface alias：召回增加，但普通疾病词、缩写和边界错误带来的 FP 更大。</li><li>API 自动补漏和 article 级实体发现：在小样本或单篇探针上有亮点，全量严格留出没有稳定提升。</li><li>不加审核地合并 CNN：实体数量上升，但审核后的 CASE/METHODS 门控表现更好。</li></ul></div>
 <div class="panel"><h3>关联侧</h3><ul><li>全量 union：多患者文章中容易把同一 finding 复制给多个患者，macro F1 下降。</li><li>单一 proximity 或单一路 API：不能同时覆盖单患者和多患者文章。</li><li>8B 简单投票、直接患者表型抽取：未在完整留出结果上超过当前稳定组合。</li></ul></div>
 </div>
-<h2>6. 复现方式</h2>
+<h2>7. 复现方式</h2>
 <div class="panel"><p><strong>环境检查：</strong></p><pre>uv sync
 uv run pytest -q
 uv run ruff check .</pre><p><strong>最终候选的核心流程：</strong>先按训练表面精度生成词典基线，再融合 CNN，分别对实体和两路关联调用缓存 API，使用结构窗口稳定关联，最后裁剪并按患者数融合。</p><pre>uv run patientphex-solver validate \
   --expected PatientPheX-V1-A/PatientPheX-A.jsonl \
   --predicted outputs/pred_a_p05_surfacewide_p01_cap20_gate_case_fig_methods_results_table_l9_primary_outside_joint_2to4.jsonl</pre><p class="small">完整逐步命令和所有参数见 <a href="../README.md">README.md</a>。数据目录、API 指南、PhenoTagger 发布包、API 缓存和 outputs 均按项目设置被 Git 忽略，不随代码仓库提交。</p></div>
-<h2>7. 线上提交状态与下一步</h2>
+<h2>8. 线上提交状态与下一步</h2>
 <div class="grid-2">
 <div class="panel"><h3><span class="tag warn">尚未线上验证</span></h3><p>已在登录的天池 A 榜提交页确认剩余 5 次机会。上传当前候选时，Chrome 文件选择器没有触发，平台未显示新提交记录，预计没有消耗机会。</p><p>恢复上传前需在 Chrome 扩展详情中开启“允许访问文件网址”，然后重新选择上述绝对路径。最终点击提交前应再次确认文件和榜单。</p></div>
 <div class="panel"><h3>继续冲分的优先级</h3><ol><li>按文章审计实体 FP/FN，优先处理普通疾病词、缩写和嵌套边界。</li><li>利用已缓存 API 响应，优化多患者 occurrence 竞争和 case-number/亲属上下文。</li><li>只在严格留一获得可重复增益后再消耗 A 榜机会，并记录线上分数与排名。</li></ol></div>
