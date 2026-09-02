@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CHIP2026 PatientPheX 实验总结</title>
+<style>
+:root{--ink:#17212b;--muted:#5f6b76;--line:#dbe3e8;--paper:#fff;--wash:#f4f7f8;--navy:#18324a;--blue:#126782;--teal:#0b8f83;--amber:#a56812;--red:#a8463d;--shadow:0 12px 32px rgba(24,50,74,.08)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;color:var(--ink);background:var(--wash);font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}code,pre,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}code{color:#174b61;background:#eaf3f5;padding:2px 5px;border-radius:4px}
+.topbar{background:var(--navy);color:#eef7fa;padding:14px max(22px,calc((100% - 1120px)/2));display:flex;justify-content:space-between;gap:20px;align-items:center;font-size:13px}.topbar a{color:#bde4ec}.topbar .repo{white-space:nowrap}
+main{max-width:1120px;margin:0 auto;padding:46px 22px 72px}.hero{padding:10px 0 30px}.eyebrow{color:var(--teal);font-weight:700;letter-spacing:.08em;font-size:12px;text-transform:uppercase}h1{font-size:clamp(30px,5vw,54px);line-height:1.15;margin:10px 0 14px;letter-spacing:0}h2{font-size:24px;line-height:1.3;margin:48px 0 16px;letter-spacing:0}h3{font-size:17px;margin:0 0 8px}p{margin:8px 0 14px}.lede{max-width:830px;color:var(--muted);font-size:17px}.notice{border-left:4px solid var(--amber);background:#fff9ed;padding:13px 16px;margin:22px 0 0;color:#5d461f}
+.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:20px 0 30px}.metric{background:var(--paper);border:1px solid var(--line);border-radius:7px;padding:17px;box-shadow:var(--shadow);min-width:0}.metric .label{color:var(--muted);font-size:12px}.metric .value{display:block;color:var(--navy);font-size:26px;font-weight:750;line-height:1.25;margin:5px 0}.metric .detail{color:var(--muted);font-size:12px}.panel{background:var(--paper);border:1px solid var(--line);border-radius:7px;padding:22px;box-shadow:var(--shadow)}.grid-2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.grid-2>.panel{height:100%}.tag{display:inline-block;border:1px solid #bdd9de;background:#eff9f8;color:#176a69;padding:2px 8px;border-radius:99px;font-size:12px;margin:2px 4px 2px 0}.tag.warn{border-color:#ecd4a7;background:#fff9ed;color:#8b5b16}table{border-collapse:collapse;width:100%;background:var(--paper);border:1px solid var(--line);box-shadow:var(--shadow)}th,td{padding:11px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{color:var(--navy);background:#edf4f6;font-size:13px}tr:last-child td{border-bottom:0}td.num,th.num{text-align:right;white-space:nowrap}tr.best{background:#eff9f8;font-weight:650}.delta{color:var(--teal);font-weight:700}
+.timeline{border-left:2px solid #b6d5db;margin:20px 0 0 10px;padding-left:24px}.event{position:relative;padding:0 0 22px}.event:before{content:"";position:absolute;width:10px;height:10px;background:var(--teal);border:3px solid var(--wash);border-radius:50%;left:-31px;top:7px}.event .date{color:var(--teal);font-size:12px;font-weight:750}.event p{margin-top:2px;color:var(--muted)}
+.pipeline{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:16px}.step{border:1px solid var(--line);border-top:4px solid var(--blue);padding:14px;background:#fbfdfe;min-height:145px}.step strong{display:block;color:var(--navy);margin-bottom:7px}.step small{color:var(--muted)}pre{overflow-x:auto;background:#17212b;color:#e9f4f4;border-radius:6px;padding:16px;line-height:1.55;font-size:12px;white-space:pre-wrap;word-break:break-word}.small{color:var(--muted);font-size:13px}.status-line{display:flex;flex-wrap:wrap;gap:7px;align-items:center}footer{color:var(--muted);border-top:1px solid var(--line);margin-top:52px;padding-top:18px;font-size:12px}
+@media(max-width:800px){.metrics,.pipeline,.grid-2{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:520px){.topbar{align-items:flex-start;flex-direction:column;gap:4px}main{padding:30px 15px 48px}.metrics,.pipeline,.grid-2{grid-template-columns:1fr}.panel{padding:17px}h2{margin-top:36px}th,td{padding:9px 7px;font-size:13px}}
+</style>
+</head>
+<body>
+<div class="topbar"><div>CHIP2026 · PatientPheX · 实验总结</div><div class="repo"><a href="https://github.com/yuanpinz/chip2026-PatientPheX">GitHub 仓库</a> · 更新基线：<span class="mono">230d2d8</span></div></div>
+<main>
+<section class="hero">
+<div class="eyebrow">Hybrid phenotype extraction without local GPU</div>
+<h1>从词典、CNN 到 API 审核的迭代记录</h1>
+<p class="lede">本项目面向天池 CHIP2026“面向生物医学全文的特定患者表型概念识别任务”。本机不使用 GPU，采用 HPO 词典、PhenoTagger CNN 高置信候选和赛题提供的 9B 大模型 API 组合完成实体识别与患者关联。</p>
+<div class="notice"><strong>结果边界：</strong>当前最高分是训练集严格留一的本地估计，不等于天池线上分数，也不能据此声称已经超过第一名。A 榜候选尚未成功上传；Chrome 文件选择器需要开启“允许访问文件网址”。</div>
+</section>
+<section class="metrics">
+<div class="metric"><span class="label">严格留一最高总分</span><span class="value">0.684781</span><span class="detail">79 篇训练文章逐篇留出</span></div>
+<div class="metric"><span class="label">当前 A 榜候选</span><span class="value">20 篇</span><span class="detail">1408 个实体 · 466 个关联值</span></div>
+<div class="metric"><span class="label">本地测试</span><span class="value">62 passed</span><span class="detail"><code>uv run pytest -q</code></span></div>
+<div class="metric"><span class="label">天池剩余机会</span><span class="value">5 次</span><span class="detail">提交页已登录，尚未消耗本轮机会</span></div>
+</section>
+<h2>1. 目标与约束</h2>
+<div class="grid-2">
+<div class="panel"><h3>目标</h3><p>提高四项指标的组合分数：Mention F1、Document F1、Association micro F1 和 Association macro F1，并最终以天池 A 榜实际返回值为准。</p><div class="status-line"><span class="tag">实体边界</span><span class="tag">HPO 映射</span><span class="tag">患者归属</span><span class="tag">否定标记</span></div></div>
+<div class="panel"><h3>工程与合规约束</h3><ul><li>环境由 <code>uv</code> 管理，代码由 GitHub 管理。</li><li>本机没有 GPU，正式流程只使用赛题允许的 <code>modelE6-9-local</code> 9B API。</li><li>训练集留一评估时，目标文章不进入词典、表面精度校准、实体审核示例或关联提示词。</li><li>API 响应按请求 SHA-256 缓存，断点可续跑，避免重复消耗 API。</li></ul></div>
+</div>
+<h2>2. 迭代结果</h2>
+<p class="small">下表来自当前工作树中的严格留一实验记录；分数公式为实体和关联四项 F1 的等权组合。数值保留 5 位用于比较，当前最佳文件的精确复算值为 <code>0.6847813035</code>。</p>
+<table><thead><tr><th>路线</th><th class="num">Mention F1</th><th class="num">Document F1</th><th class="num">Assoc. micro F1</th><th class="num">Assoc. macro F1</th><th class="num">总分</th></tr></thead>
+<tbody>
+<tr><td>严格留一词典基线</td><td class="num">0.65590</td><td class="num">0.72560</td><td class="num">0.52208</td><td class="num">0.43888</td><td class="num">0.58561</td></tr>
+<tr><td>+ 高置信 PhenoTagger CNN</td><td class="num">0.68053</td><td class="num">0.76447</td><td class="num">0.52208</td><td class="num">0.43888</td><td class="num">0.60149</td></tr>
+<tr><td>+ 9B occurrence-level 患者关联</td><td class="num">0.68053</td><td class="num">0.76447</td><td class="num">0.65982</td><td class="num">0.59490</td><td class="num">0.67493</td></tr>
+<tr><td>+ 稳定关联融合</td><td class="num">0.68820</td><td class="num">0.76813</td><td class="num">0.66422</td><td class="num">0.59746</td><td class="num">0.67950</td></tr>
+<tr><td>+ 训练集表面精度校准</td><td class="num">0.69071</td><td class="num">0.77179</td><td class="num">0.66568</td><td class="num">0.59869</td><td class="num">0.68172</td></tr>
+<tr class="best"><td>+ 9B 实体审核门控（当前最佳）</td><td class="num">0.69320</td><td class="num">0.77318</td><td class="num">0.67177</td><td class="num">0.60098</td><td class="num">0.68478</td></tr>
+</tbody></table>
+<p class="small">相对词典基线，当前最佳严格留一总分提升约 <span class="delta">+0.09917</span>；主要增益来自患者关联，实体审核门控继续小幅提升实体和关联质量。</p>
+<h2>3. 实验时间线</h2>
+<div class="timeline">
+<div class="event"><div class="date">2026-08-28</div><h3>建立混合求解器</h3><p>读取 PatientPheX 数据和 HPO 本体，构造可校验的 JSONL 输出与本地评估器，先得到词典基线。</p></div>
+<div class="event"><div class="date">2026-08-29</div><h3>从距离关联转向结构化患者判断</h3><p>增加 occurrence 约束和患者结构化提示，使 API 只在已识别实体中选择患者归属，减少模型发明 HPO 值。</p></div>
+<div class="event"><div class="date">2026-08-30</div><h3>加入 API 实体发现、直接患者表型和联合判断实验</h3><p>比较 article/chunk API、patient-direct、joint 和 consensus 路线；全量留出结果显示自动实体补漏不稳定，因此未纳入最终主流程。</p></div>
+<div class="event"><div class="date">2026-08-30 至 2026-08-31</div><h3>融合 CNN、缩写恢复与多源关联</h3><p>使用高置信 CNN occurrence 提升召回，扫描阈值、表面精度、缩写、投票、union 和患者数条件，保留可复现且稳定的组合。</p></div>
+<div class="event"><div class="date">2026-09-01 至 2026-09-02</div><h3>收紧合规 9B 流程并修正边界</h3><p>只对新增 occurrence 做 9B 实体审核；采用 CASE/METHODS/RESULTS 结构窗口、显式群组保留、最终实体裁剪，避免被拒绝的实体重新进入关联。</p></div>
+</div>
+<h2>4. 当前最佳方案</h2>
+<div class="pipeline">
+<div class="step"><strong>① 词典候选</strong><small>训练集表面统计 + HPO OBO 别名；关闭任意低精度 alias，保留否定标记和全局 offset。</small></div>
+<div class="step"><strong>② CNN 召回</strong><small>PhenoTagger 分数至少 <code>0.9997</code>，文本至少 6 字符，同一 HPO 每文最多 20 个 occurrence。</small></div>
+<div class="step"><strong>③ 9B 实体审核</strong><small>只对 CNN 新增项在 CASE/METHODS 且文本至少 9 字符的范围做审核门控；词典实体不受误拒绝影响。</small></div>
+<div class="step"><strong>④ 患者关联融合</strong><small>occurrence-level primary + joint secondary；患者数 2–4 时联合，其他文章使用 primary，最后裁剪到审核实体。</small></div>
+</div>
+<div class="panel" style="margin-top:16px"><h3>当前 A 榜候选</h3><p><code>outputs/pred_a_p05_surfacewide_p01_cap20_gate_case_fig_methods_results_table_l9_primary_outside_joint_2to4.jsonl</code></p><div class="status-line"><span class="tag">20 documents</span><span class="tag">1408 entities</span><span class="tag">1401 positive</span><span class="tag">7 negative</span><span class="tag">466 association values</span><span class="tag">445 unique HPO IDs</span></div><p class="small">该文件已通过本地 <code>validate</code>。README 中“1427 个实体、470 个关联值”属于较早候选的历史统计，当前文件统计以上述实测值为准。</p></div>
+<h2>5. 已尝试但未进入最终流程的方向</h2>
+<div class="grid-2">
+<div class="panel"><h3>实体侧</h3><ul><li>低阈值 CNN、放宽最短文本和大范围 surface alias：召回增加，但普通疾病词、缩写和边界错误带来的 FP 更大。</li><li>API 自动补漏和 article 级实体发现：在小样本或单篇探针上有亮点，全量严格留出没有稳定提升。</li><li>不加审核地合并 CNN：实体数量上升，但审核后的 CASE/METHODS 门控表现更好。</li></ul></div>
+<div class="panel"><h3>关联侧</h3><ul><li>全量 union：多患者文章中容易把同一 finding 复制给多个患者，macro F1 下降。</li><li>单一 proximity 或单一路 API：不能同时覆盖单患者和多患者文章。</li><li>8B 简单投票、直接患者表型抽取：未在完整留出结果上超过当前稳定组合。</li></ul></div>
+</div>
+<h2>6. 复现方式</h2>
+<div class="panel"><p><strong>环境检查：</strong></p><pre>uv sync
+uv run pytest -q
+uv run ruff check .</pre><p><strong>最终候选的核心流程：</strong>先按训练表面精度生成词典基线，再融合 CNN，分别对实体和两路关联调用缓存 API，使用结构窗口稳定关联，最后裁剪并按患者数融合。</p><pre>uv run patientphex-solver validate \
+  --expected PatientPheX-V1-A/PatientPheX-A.jsonl \
+  --predicted outputs/pred_a_p05_surfacewide_p01_cap20_gate_case_fig_methods_results_table_l9_primary_outside_joint_2to4.jsonl</pre><p class="small">完整逐步命令和所有参数见 <a href="../README.md">README.md</a>。数据目录、API 指南、PhenoTagger 发布包、API 缓存和 outputs 均按项目设置被 Git 忽略，不随代码仓库提交。</p></div>
+<h2>7. 线上提交状态与下一步</h2>
+<div class="grid-2">
+<div class="panel"><h3><span class="tag warn">尚未线上验证</span></h3><p>已在登录的天池 A 榜提交页确认剩余 5 次机会。上传当前候选时，Chrome 文件选择器没有触发，平台未显示新提交记录，预计没有消耗机会。</p><p>恢复上传前需在 Chrome 扩展详情中开启“允许访问文件网址”，然后重新选择上述绝对路径。最终点击提交前应再次确认文件和榜单。</p></div>
+<div class="panel"><h3>继续冲分的优先级</h3><ol><li>按文章审计实体 FP/FN，优先处理普通疾病词、缩写和嵌套边界。</li><li>利用已缓存 API 响应，优化多患者 occurrence 竞争和 case-number/亲属上下文。</li><li>只在严格留一获得可重复增益后再消耗 A 榜机会，并记录线上分数与排名。</li></ol></div>
+</div>
+<footer>生成于 2026-09-02 · 工作目录：<span class="mono">/Users/admin/workspace/chip2026-PatientPheX</span> · 本文档是实验记录，不替代天池官方评测结果。</footer>
+</main>
+</body>
+</html>
