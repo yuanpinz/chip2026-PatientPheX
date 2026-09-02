@@ -39,6 +39,7 @@ from .evaluation import evaluate
 from .fusion import (
     augment_associations_by_vote,
     clip_associations_to_entities,
+    filter_entities_by_judgment,
     fuse_associations_by_patient_count,
     fuse_associations_by_vote,
     stabilize_associations,
@@ -319,6 +320,7 @@ def _cmd_fuse_associations(args: argparse.Namespace) -> None:
             if args.union_patient_count_range is not None
             else None
         ),
+        range_outside_primary=args.range_outside_primary,
         max_primary_to_secondary_ratio=args.max_primary_to_secondary_ratio,
         structure_previous_distance=args.structure_previous_distance,
         structure_next_distance=args.structure_next_distance,
@@ -531,7 +533,10 @@ def _cmd_subtract_entities(args: argparse.Namespace) -> None:
 
 
 def _cmd_clip_associations(args: argparse.Namespace) -> None:
-    predictions = clip_associations_to_entities(read_jsonl(args.input))
+    predictions = clip_associations_to_entities(
+        read_jsonl(args.input),
+        read_jsonl(args.entities) if args.entities is not None else None,
+    )
     write_jsonl(args.output, predictions)
     total = sum(
         len(item.get("phenotype", []))
@@ -569,6 +574,25 @@ def _cmd_stabilize_associations(args: argparse.Namespace) -> None:
         for item in row.get("association", [])
     )
     print(f"wrote {args.output} ({len(predictions)} documents, {total} associations)")
+
+
+def _cmd_filter_judged_entities(args: argparse.Namespace) -> None:
+    train_path, test_path, _ = _paths(args)
+    documents = read_jsonl(test_path if args.split == "a" else train_path)
+    predictions = filter_entities_by_judgment(
+        documents,
+        read_jsonl(args.candidates),
+        read_jsonl(args.additions),
+        read_jsonl(args.judged),
+        sections={value.upper() for value in args.sections},
+        min_text_length=args.min_text_length,
+    )
+    errors = validate_submission(predictions, documents)
+    if errors:
+        raise SystemExit("submission validation failed:\n" + "\n".join(errors[:30]))
+    write_jsonl(args.output, predictions)
+    total = sum(len(row.get("entities", [])) for row in predictions)
+    print(f"wrote {args.output} ({len(predictions)} documents, {total} entities)")
 
 
 def _cmd_abbreviation_candidates(args: argparse.Namespace) -> None:
@@ -914,6 +938,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     fuse.add_argument(
+        "--range-outside-primary",
+        action="store_true",
+        help="with a patient-count range, keep primary values outside the range",
+    )
+    fuse.add_argument(
         "--max-primary-to-secondary-ratio",
         type=float,
         default=None,
@@ -1092,6 +1121,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="remove association values not represented by positive entities",
     )
     clip.add_argument("--input", required=True)
+    clip.add_argument(
+        "--entities",
+        default=None,
+        help="optional JSONL containing the final entity set for each article",
+    )
     clip.add_argument("--output", required=True)
     clip.set_defaults(func=_cmd_clip_associations)
 
@@ -1142,6 +1176,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     stabilize.add_argument("--output", required=True)
     stabilize.set_defaults(func=_cmd_stabilize_associations)
+
+    filter_judged = subparsers.add_parser(
+        "filter-judged-entities",
+        help="apply entity-judge decisions to selected candidate additions",
+    )
+    filter_judged.add_argument("--data-dir", default="PatientPheX-V1-A")
+    filter_judged.add_argument("--split", choices=["a", "train"], default="a")
+    filter_judged.add_argument("--candidates", required=True)
+    filter_judged.add_argument("--additions", required=True)
+    filter_judged.add_argument("--judged", required=True)
+    filter_judged.add_argument("--sections", nargs="+", default=[])
+    filter_judged.add_argument("--min-text-length", type=int, default=0)
+    filter_judged.add_argument("--output", required=True)
+    filter_judged.set_defaults(func=_cmd_filter_judged_entities)
 
     abbreviation_candidates = subparsers.add_parser(
         "abbreviation-candidates",

@@ -27,6 +27,7 @@ from .evaluation import evaluate
 from .fusion import (
     augment_associations_by_vote,
     clip_associations_to_entities,
+    filter_entities_by_judgment,
     fuse_associations_by_vote,
     stabilize_associations,
 )
@@ -59,6 +60,7 @@ __all__ = [
     "discover_entities_with_llm",
     "discover_patient_phenotypes_with_llm",
     "evaluate",
+    "filter_entities_by_judgment",
     "fuse_associations_by_vote",
     "fuse_cnn_entities",
     "merge_entities",

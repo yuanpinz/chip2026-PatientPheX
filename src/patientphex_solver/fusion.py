@@ -17,6 +17,15 @@ def _rows_by_id(rows: list[JsonObject]) -> dict[str, JsonObject]:
     return {str(row["pmc_id"]): row for row in rows}
 
 
+def _entity_key(entity: JsonObject) -> tuple[int, int, str, str | None]:
+    return (
+        int(entity["offset"]),
+        int(entity["length"]),
+        str(entity["identifier"]),
+        entity.get("note"),
+    )
+
+
 def _association_sets(row: JsonObject) -> dict[str, set[str]]:
     return {
         str(item["patient_id"]): set(item.get("phenotype", []))
@@ -38,11 +47,27 @@ def _entity_values(row: JsonObject) -> set[str]:
     return values
 
 
-def clip_associations_to_entities(rows: list[JsonObject]) -> list[JsonObject]:
-    """Keep association values that are represented by positive entity labels."""
+def clip_associations_to_entities(
+    rows: list[JsonObject],
+    entity_rows: list[JsonObject] | None = None,
+) -> list[JsonObject]:
+    """Keep association values represented by a supplied positive entity set.
+
+    ``entity_rows`` is useful when association predictions were generated from
+    a wider candidate set than the final, reviewed entity annotations.
+    """
+    entities_by_id = _rows_by_id(entity_rows) if entity_rows is not None else None
     predictions: list[JsonObject] = []
     for row in rows:
-        allowed = _entity_values(row)
+        entity_row = row
+        if entities_by_id is not None:
+            try:
+                entity_row = entities_by_id[str(row["pmc_id"])]
+            except KeyError as exc:
+                raise ValueError(
+                    f"missing entity row for PMC {row.get('pmc_id')}"
+                ) from exc
+        allowed = _entity_values(entity_row)
         associations = [
             {
                 "patient_id": item["patient_id"],
@@ -54,7 +79,62 @@ def clip_associations_to_entities(rows: list[JsonObject]) -> list[JsonObject]:
             }
             for item in row.get("association", [])
         ]
-        predictions.append({**row, "association": associations})
+        clipped = {**row, "association": associations}
+        if entities_by_id is not None:
+            clipped["entities"] = list(entity_row.get("entities", []))
+        predictions.append(clipped)
+    return predictions
+
+
+def filter_entities_by_judgment(
+    documents: list[JsonObject],
+    candidate_rows: list[JsonObject],
+    addition_rows: list[JsonObject],
+    judged_rows: list[JsonObject],
+    *,
+    sections: set[str] | None = None,
+    min_text_length: int = 0,
+) -> list[JsonObject]:
+    """Apply entity-judge decisions only to selected candidate additions.
+
+    ``candidate_rows`` contains the complete entity set, while ``addition_rows``
+    identifies the CNN-only occurrences that were sent to the judge. Candidates
+    outside the gate are preserved, so the judge cannot accidentally remove
+    established dictionary entities or unreviewed article sections.
+    """
+    if min_text_length < 0:
+        raise ValueError("minimum entity text length must be non-negative")
+    selected_sections = {value.upper() for value in (sections or set())}
+    documents_by_id = _rows_by_id(documents)
+    additions_by_id = _rows_by_id(addition_rows)
+    judged_by_id = _rows_by_id(judged_rows)
+    predictions: list[JsonObject] = []
+    for candidate_row in candidate_rows:
+        pmc_id = str(candidate_row["pmc_id"])
+        document = documents_by_id.get(pmc_id)
+        additions = additions_by_id.get(pmc_id)
+        judged = judged_by_id.get(pmc_id)
+        if document is None or additions is None or judged is None:
+            raise ValueError(f"missing judgment input for PMC {pmc_id}")
+        addition_keys = {_entity_key(entity) for entity in additions.get("entities", [])}
+        accepted_keys = {_entity_key(entity) for entity in judged.get("entities", [])}
+        kept: list[JsonObject] = []
+        for entity in candidate_row.get("entities", []):
+            key = _entity_key(entity)
+            located = passage_for_offset(document, int(entity["offset"]))
+            section = (
+                str(located[1].get("section_type", "")).upper()
+                if located is not None
+                else ""
+            )
+            gated = (
+                key in addition_keys
+                and (not selected_sections or section in selected_sections)
+                and len(str(entity.get("text", ""))) >= min_text_length
+            )
+            if not gated or key in accepted_keys:
+                kept.append(entity)
+        predictions.append({**candidate_row, "entities": kept})
     return predictions
 
 
@@ -269,6 +349,7 @@ def fuse_associations_by_patient_count(
     *,
     union_multi: bool = False,
     union_patient_count_range: tuple[int, int] | None = None,
+    range_outside_primary: bool = False,
     max_primary_to_secondary_ratio: float | None = None,
     structure_previous_distance: int | None = None,
     structure_next_distance: int | None = None,
@@ -281,6 +362,9 @@ def fuse_associations_by_patient_count(
     validated experimental policy that unions both sources for all articles.
     ``union_patient_count_range`` overrides both policies and unions sources only
     when the article patient count is within the inclusive range.
+    When ``range_outside_primary`` is enabled with a count range, articles
+    outside that range retain only the primary source instead of the secondary
+    source.
     When ``max_primary_to_secondary_ratio`` is set, a patient that would use the
     union instead uses only the non-empty secondary values when its primary
     value count divided by its secondary value count reaches the threshold.
@@ -340,11 +424,16 @@ def fuse_associations_by_patient_count(
                 primary_count = len(primary_values)
                 ratio = primary_count / secondary_count
                 use_secondary_only = ratio >= max_primary_to_secondary_ratio
-            selected = (
-                secondary_values
-                if not use_union or use_secondary_only
-                else primary_values | secondary_values
-            )
+            if use_union and not use_secondary_only:
+                selected = primary_values | secondary_values
+            elif (
+                range_outside_primary
+                and union_patient_count_range is not None
+                and not use_union
+            ):
+                selected = primary_values
+            else:
+                selected = secondary_values
             ordered: list[str] = []
             for source in (primary, secondary):
                 for item in source.get("association", []):

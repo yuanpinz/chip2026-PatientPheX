@@ -37,6 +37,7 @@ from patientphex_solver.evaluation import evaluate
 from patientphex_solver.fusion import (
     augment_associations_by_vote,
     clip_associations_to_entities,
+    filter_entities_by_judgment,
     fuse_associations_by_patient_count,
     fuse_associations_by_vote,
     stabilize_associations,
@@ -183,6 +184,67 @@ def test_cnn_fusion_preserves_association_and_strips_score() -> None:
             "note": None,
         }
     ]
+
+
+def test_filter_judged_entities_only_applies_to_gated_additions() -> None:
+    document = {
+        "pmc_id": "p1",
+        "pmid": "m1",
+        "patient": [],
+        "full_text": [
+            {"section_type": "CASE", "offset": 0, "text": "base finding"},
+            {"section_type": "INTRO", "offset": 20, "text": "intro finding"},
+        ],
+    }
+    candidates = [
+        {
+            "pmc_id": "p1",
+            "pmid": "m1",
+            "entities": [
+                {"identifier": "HP:1", "type": "Phenotype", "offset": 0, "length": 4, "text": "base", "note": None},
+                {"identifier": "HP:2", "type": "Phenotype", "offset": 5, "length": 7, "text": "finding", "note": None},
+                {"identifier": "HP:3", "type": "Phenotype", "offset": 20, "length": 5, "text": "intro", "note": None},
+            ],
+            "association": [],
+        }
+    ]
+    additions = [{"pmc_id": "p1", "entities": [candidates[0]["entities"][1], candidates[0]["entities"][2]]}]
+    judged = [{"pmc_id": "p1", "entities": [candidates[0]["entities"][1]]}]
+
+    result = filter_entities_by_judgment(
+        [document],
+        candidates,
+        additions,
+        judged,
+        sections={"CASE"},
+        min_text_length=6,
+    )
+
+    assert [entity["identifier"] for entity in result[0]["entities"]] == [
+        "HP:1",
+        "HP:2",
+        "HP:3",
+    ]
+
+
+def test_filter_judged_entities_removes_rejected_gated_addition() -> None:
+    document = {
+        "pmc_id": "p1",
+        "pmid": "m1",
+        "patient": [],
+        "full_text": [{"section_type": "CASE", "offset": 0, "text": "long finding"}],
+    }
+    candidate = {"identifier": "HP:2", "type": "Phenotype", "offset": 0, "length": 12, "text": "long finding", "note": None}
+    result = filter_entities_by_judgment(
+        [document],
+        [{"pmc_id": "p1", "pmid": "m1", "entities": [candidate], "association": []}],
+        [{"pmc_id": "p1", "entities": [candidate]}],
+        [{"pmc_id": "p1", "entities": []}],
+        sections={"CASE"},
+        min_text_length=6,
+    )
+
+    assert result[0]["entities"] == []
 
 
 def test_surface_precision_is_leave_one_out_safe_and_ignores_negative_gold() -> None:
@@ -965,6 +1027,36 @@ def test_clip_associations_to_entities_supports_compound_ids_and_unmapped_text()
     ]
 
 
+def test_clip_associations_can_use_a_narrower_final_entity_set() -> None:
+    rows = [
+        {
+            "pmc_id": "doc",
+            "entities": [
+                {"identifier": "HP:OLD", "text": "old", "note": None},
+                {"identifier": "HP:REMOVED", "text": "removed", "note": None},
+            ],
+            "association": [
+                {"patient_id": "P1", "phenotype": ["HP:OLD", "HP:REMOVED"]}
+            ],
+        }
+    ]
+    final_entities = [
+        {
+            "pmc_id": "doc",
+            "entities": [
+                {"identifier": "HP:OLD", "text": "old", "note": None},
+            ],
+        }
+    ]
+
+    clipped = clip_associations_to_entities(rows, final_entities)
+
+    assert clipped[0]["entities"] == final_entities[0]["entities"]
+    assert clipped[0]["association"] == [
+        {"patient_id": "P1", "phenotype": ["HP:OLD"]}
+    ]
+
+
 def test_stabilize_associations_clips_old_and_filters_new_occurrences() -> None:
     text = "P1 had old finding. P1 had new finding. P1 had no other finding."
     new_start = text.index("new finding")
@@ -1177,6 +1269,57 @@ def test_fusion_can_union_only_for_patient_count_range() -> None:
     )
     assert fused[0]["association"] == [
         {"patient_id": "P1", "phenotype": ["B"]}
+    ]
+    assert fused[1]["association"] == [
+        {"patient_id": "P1", "phenotype": ["A", "B"]},
+        {"patient_id": "P2", "phenotype": ["C"]},
+    ]
+
+
+def test_fusion_can_keep_primary_outside_patient_count_range() -> None:
+    documents = [
+        {"pmc_id": "single", "patient": [{"patient_id": "P1"}]},
+        {
+            "pmc_id": "multi",
+            "patient": [{"patient_id": "P1"}, {"patient_id": "P2"}],
+        },
+    ]
+    base = [
+        {"pmc_id": "single", "pmid": "1", "entities": []},
+        {"pmc_id": "multi", "pmid": "2", "entities": []},
+    ]
+    primary = [
+        {"pmc_id": "single", "association": [{"patient_id": "P1", "phenotype": ["A"]}]},
+        {
+            "pmc_id": "multi",
+            "association": [
+                {"patient_id": "P1", "phenotype": ["A"]},
+                {"patient_id": "P2", "phenotype": [],},
+            ],
+        },
+    ]
+    secondary = [
+        {"pmc_id": "single", "association": [{"patient_id": "P1", "phenotype": ["B"]}]},
+        {
+            "pmc_id": "multi",
+            "association": [
+                {"patient_id": "P1", "phenotype": ["B"]},
+                {"patient_id": "P2", "phenotype": ["C"]},
+            ],
+        },
+    ]
+
+    fused = fuse_associations_by_patient_count(
+        documents,
+        base,
+        primary,
+        secondary,
+        union_patient_count_range=(2, 2),
+        range_outside_primary=True,
+    )
+
+    assert fused[0]["association"] == [
+        {"patient_id": "P1", "phenotype": ["A"]}
     ]
     assert fused[1]["association"] == [
         {"patient_id": "P1", "phenotype": ["A", "B"]},
